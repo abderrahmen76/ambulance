@@ -1,30 +1,35 @@
 import 'package:flutter/material.dart';
+import 'environment.dart';
 
 /// Supabase Configuration
 /// Store all environment variables here for centralized management
 class SupabaseConfig {
   // Supabase URL
-  static const String supabaseUrl =
-      'https://aaeglgmzusasbxatjkjl.supabase.co';
+  static const String supabaseUrl = 'https://uxsimhenmvyessotnnmx.supabase.co';
 
   // Anonymous key for client-side requests
   static const String anonKey =
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhZWdsZ216dXNhc2J4YXRqa2psIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIxNDEzNDAsImV4cCI6MjA4NzcxNzM0MH0.OyKGQbiqOtQE3fOv1uJKIcGuIi1axW9HQagqjbq011E';
+      'sb_publishable_nlrCg7avzbCpLMzaAs-MBw_usjdOpTL';
 
-  // Service role key (keep secure, don't expose in client)
-  static const String serviceRoleKey =
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhZWdsZ216dXNhc2J4YXRqa2psIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjE0MTM0MCwiZXhwIjoyMDg3NzE3MzQwfQ.P-F1jvG_XrXZ9oyXciOV3YW1dn8xG4Z6mSLr2U5Oy6c';
+  // Notification Backend Server URL (from environment.dart)
+  static String get notificationBackendUrl =>
+      EnvironmentConfig.notificationBackendUrl;
 
   // API endpoints
   static const String usersTable = '/rest/v1/users';
   static const String rolesTable = '/rest/v1/roles';
   static const String roleUserTable = '/rest/v1/role_user';
+  static const String userRoleView = '/rest/v1/user_role_view';
   static const String ambulancesTable = '/rest/v1/ambulances';
   static const String missionsTable = '/rest/v1/missions';
   static const String fuelCardsTable = '/rest/v1/fuel_cards';
   static const String maintenanceRecordsTable = '/rest/v1/maintenance_records';
+  static const String equipmentRentalsTable = '/rest/v1/equipment_rentals';
+  static const String driverLocationsTable = '/rest/v1/driver_locations';
+  static const String ambulanceLocationSnapshotsTable =
+      '/rest/v1/ambulance_location_snapshots';
 
-  // HTTP Headers
+  // HTTP Headers (deprecated - use ApiClient.getHeaders() instead for JWT support)
   static Map<String, String> get headers => {
         'apikey': anonKey,
         'Authorization': 'Bearer $anonKey',
@@ -36,7 +41,7 @@ class SupabaseConfig {
 class AppConfig {
   static const String appName = 'Ambulance Driver';
   static const String appVersion = '1.0.0';
-  
+
   // API Timeouts (milliseconds)
   static const int apiTimeout = 10000;
   static const int connectionTimeout = 15000;
@@ -55,7 +60,8 @@ class AppColors {
   static const Color textPrimary = Color(0xFF1E293B);
   static const Color textSecondary = Color(0xFF64748B);
   static const Color border = Color(0xFFE2E8F0);
-  static const Color lightPink = Color(0xFFFCE7F3); // Light pink for input fields
+  static const Color lightPink =
+      Color(0xFFFCE7F3); // Light pink for input fields
 }
 
 /// Clinics and Locations
@@ -116,18 +122,89 @@ class LocationData {
   static const List<String> priorityOptions = [
     'normal',
     'urgent',
+    'IRM',
+    'scanner',
+    'coro',
+    'alerte thrombolyse',
+    'transfert',
+    'dialyse',
+    'deces',
+    'scintigraphie',
+    'oxygenotherapie',
+    'autre',
+  ];
+
+  // Motif de Transport options
+  static const List<String> motifTransportOptions = [
     'urgence',
+    'IRM',
+    'scanner',
+    'coro',
+    'alerte thrombolyse',
+    'transfert',
+    'dialyse',
+    'deces',
+    'scintigraphie',
+    'oxygenotherapie',
   ];
 
   // Get display name for priority
   static String getPriorityDisplayName(String priority) {
     switch (priority.toLowerCase()) {
+      case 'normal':
+        return 'Normal';
       case 'urgent':
         return 'Urgent';
+      case 'irm':
+        return 'IRM';
+      case 'scanner':
+        return 'Scanner';
+      case 'coro':
+        return 'Coronarographie';
+      case 'alerte thrombolyse':
+        return 'Alerte Thrombolyse';
+      case 'transfert':
+        return 'Transfert';
+      case 'dialyse':
+        return 'Dialyse';
+      case 'deces':
+        return 'Décès';
+      case 'scintigraphie':
+        return 'Scintigraphie';
+      case 'oxygenotherapie':
+        return 'Oxygénothérapie';
+      case 'autre':
+        return 'Autre (personnalisé)';
+      default:
+        return priority;
+    }
+  }
+
+  // Get display name for motif de transport
+  static String getMotifTransportDisplayName(String motif) {
+    switch (motif.toLowerCase()) {
       case 'urgence':
         return 'Urgence';
+      case 'irm':
+        return 'IRM';
+      case 'scanner':
+        return 'Scanner';
+      case 'coro':
+        return 'Coronarographie';
+      case 'alerte thrombolyse':
+        return 'Alerte Thrombolyse';
+      case 'transfert':
+        return 'Transfert';
+      case 'dialyse':
+        return 'Dialyse';
+      case 'deces':
+        return 'Décès';
+      case 'scintigraphie':
+        return 'Scintigraphie';
+      case 'oxygenotherapie':
+        return 'Oxygénothérapie';
       default:
-        return 'Normal';
+        return motif;
     }
   }
 }

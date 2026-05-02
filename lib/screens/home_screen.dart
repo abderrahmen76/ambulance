@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../config/constants.dart';
+import '../utils/responsive.dart';
 import '../models/ambulance_model.dart';
 import '../services/ambulance_service.dart';
 import '../services/auth_service.dart';
@@ -24,13 +25,14 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     print('\n🏠 [HOME SCREEN] initState() called');
-    
+
     // Start fetching ambulance data immediately
     if (_authService.cachedUser != null) {
       print('👤 [HOME SCREEN] User found: ${_authService.cachedUser!.name}');
       print('⏳ [HOME SCREEN] Starting ambulance data fetch...');
-      
-      _ambulanceFuture = _ambulanceService.getAmbulanceForDriver(_authService.cachedUser!.id);
+
+      _ambulanceFuture =
+          _ambulanceService.getAmbulanceForDriver(_authService.cachedUser!.id);
     }
   }
 
@@ -47,9 +49,11 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
-              _authService.logout();
-              Navigator.of(context).pushReplacementNamed('/login');
+            onPressed: () async {
+              await _authService.logout();
+              if (mounted) {
+                Navigator.of(context).pushReplacementNamed('/login');
+              }
             },
             child: const Text(
               'Logout',
@@ -95,7 +99,7 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
+          padding: EdgeInsets.all(context.responsive.paddingValueLarge),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -105,10 +109,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     TextSpan(
                       text: 'Hi, ',
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            color: AppColors.textPrimary,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.w500,
+                              ),
                     ),
                     TextSpan(
                       text: user.name,
@@ -289,10 +294,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     children: [
                       Text(
                         'Assigned Ambulance',
-                        style:
-                            Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: AppColors.textSecondary,
-                                ),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
                       ),
                       Text(
                         ambulance.ambulanceNumber,

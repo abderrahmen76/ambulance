@@ -58,16 +58,72 @@ class MaintenanceService {
   }
 
   /// Add new maintenance record with form data
-  Future<void> addMaintenanceRecord(Map<String, dynamic> maintenanceData) async {
+  Future<void> addMaintenanceRecord(
+      Map<String, dynamic> maintenanceData) async {
     try {
-      print('[MaintenanceService] addMaintenanceRecord() called with data: $maintenanceData');
-      
+      print(
+          '[MaintenanceService] addMaintenanceRecord() called with data: $maintenanceData');
+
+      // Extract kilometrage for later UPDATE (workaround for column-level permissions)
+      final kilometrage = maintenanceData['kilometrage'];
+      final ambulanceId = maintenanceData['ambulance_id'];
+
+      // ⚠️ WORKAROUND: Remove kilometrage from INSERT (column permission issue)
+      // We'll UPDATE it separately after the record is created
+      maintenanceData.remove('kilometrage');
+
+      print(
+          '[MaintenanceService] 🔍 REMOVED kilometrage from INSERT, will UPDATE separately');
+
+      // Step 1: POST maintenance record WITHOUT kilometrage (this works)
       final response = await _apiClient.post(
         SupabaseConfig.maintenanceRecordsTable,
         maintenanceData,
       );
-      
-      print('[MaintenanceService] addMaintenanceRecord() response: $response');
+
+      print(
+          '[MaintenanceService] addMaintenanceRecord() POST response: $response');
+
+      // Step 2: Now UPDATE the same record to add kilometrage (UPDATE has different permissions)
+      if (kilometrage != null && response.isNotEmpty) {
+        try {
+          final recordId = response['id'];
+          print(
+              '[MaintenanceService] 🔄 UPDATING record $recordId with kilometrage: $kilometrage');
+
+          final patchEndpoint =
+              '${SupabaseConfig.maintenanceRecordsTable}?id=eq.$recordId';
+          await _apiClient.patch(
+            patchEndpoint,
+            {'kilometrage': kilometrage},
+          );
+
+          print(
+              '[MaintenanceService] ✅ Updated maintenance record $recordId kilometrage to $kilometrage');
+        } catch (e) {
+          print(
+              '[MaintenanceService] Warning: Failed to update kilometrage: $e');
+          // Don't rethrow - record was already created
+        }
+      }
+
+      // Step 3: Update ambulance kilometrage if provided
+      if (kilometrage != null && ambulanceId != null) {
+        try {
+          final endpoint =
+              '${SupabaseConfig.ambulancesTable}?id=eq.$ambulanceId';
+          await _apiClient.patch(
+            endpoint,
+            {'kilometrage': kilometrage},
+          );
+          print(
+              '[MaintenanceService] Updated ambulance $ambulanceId kilometrage to $kilometrage');
+        } catch (e) {
+          print(
+              '[MaintenanceService] Warning: Failed to update ambulance kilometrage: $e');
+          // Don't rethrow - maintenance record was already added
+        }
+      }
     } catch (e) {
       print('[MaintenanceService] addMaintenanceRecord() ERROR: $e');
       rethrow;

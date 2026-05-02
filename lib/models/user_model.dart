@@ -6,6 +6,7 @@ class User {
   final String email;
   final String? role;
   final String? roleLabel;
+  final String? tenantId;
 
   User({
     required this.id,
@@ -13,6 +14,7 @@ class User {
     required this.email,
     this.role,
     this.roleLabel,
+    this.tenantId,
   });
 
   /// Factory constructor to create User from JSON
@@ -23,6 +25,7 @@ class User {
       email: json['email'] as String? ?? '',
       role: json['role'] as String?,
       roleLabel: json['roleLabel'] as String?,
+      tenantId: json['tenantId'] as String? ?? json['tenant_id'] as String?,
     );
   }
 
@@ -40,6 +43,7 @@ class User {
         'email': email,
         'role': role,
         'roleLabel': roleLabel,
+        'tenantId': tenantId,
       };
 
   /// Create a copy with modified fields

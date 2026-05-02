@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config/constants.dart';
 import '../models/user_model.dart';
+import '../services/company_staff_service.dart';
 import '../services/fuel_card_service.dart';
+import '../utils/responsive.dart';
 
 class AddFuelCardScreen extends StatefulWidget {
   final User user;
@@ -21,15 +23,17 @@ class AddFuelCardScreen extends StatefulWidget {
 class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
   late TextEditingController _dateController;
   late TextEditingController _driverController;
-  late TextEditingController _quantityController;
-  late TextEditingController _amountController;
-  late TextEditingController _cardNumberController;
+  late TextEditingController _soldesPaidController;
   late TextEditingController _notesController;
+  late TextEditingController _kilometrageController;
 
   final _formKey = GlobalKey<FormState>();
   final FuelCardService _fuelCardService = FuelCardService();
+  final CompanyStaffService _companyStaffService = CompanyStaffService();
   bool _isLoading = false;
-  String _fullCardNumber = ''; // Store full card number internally
+  double _currentBalance = 0.0;
+  List<User> _companyStaff = [];
+  final Set<String> _selectedTeammateIds = {};
 
   @override
   void initState() {
@@ -37,31 +41,74 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
     print('[AddFuelCard] Initializing form...');
     final today = DateFormat('dd/MM/yyyy').format(DateTime.now());
     _dateController = TextEditingController(text: today);
-    _driverController = TextEditingController(); // Empty by default
-    _quantityController = TextEditingController();
-    _amountController = TextEditingController();
-    _cardNumberController = TextEditingController();
-    _fullCardNumber = '';
+    _driverController = TextEditingController(text: widget.user.name);
+    _soldesPaidController = TextEditingController();
     _notesController = TextEditingController();
+    _kilometrageController = TextEditingController();
+    _loadCurrentBalance();
+    _loadCompanyStaff();
     print('[AddFuelCard] Form initialized');
   }
 
-  String _maskCardNumberForDisplay(String digitsOnly) {
-    // Format as **** **** **** XXXX - showing only last 4 digits
-    if (digitsOnly.length < 16) return digitsOnly;
-    
-    String last4 = digitsOnly.substring(12);
-    return '**** **** **** $last4';
+  Future<void> _loadCompanyStaff() async {
+    final tenantId = widget.user.tenantId;
+    if (tenantId == null || tenantId.isEmpty) {
+      return;
+    }
+
+    try {
+      final staff = await _companyStaffService.getCompanyStaff(tenantId);
+      if (!mounted) return;
+      setState(() {
+        _companyStaff = staff.where((member) => member.id != widget.user.id).toList();
+      });
+      _updateDriverField();
+    } catch (e) {
+      print('[AddFuelCard] Error loading company staff: $e');
+    }
+  }
+
+  void _toggleTeammate(User teammate, bool selected) {
+    setState(() {
+      if (selected) {
+        _selectedTeammateIds.add(teammate.id);
+      } else {
+        _selectedTeammateIds.remove(teammate.id);
+      }
+      _updateDriverField();
+    });
+  }
+
+  void _updateDriverField() {
+    final teammateNames = _companyStaff
+        .where((member) => _selectedTeammateIds.contains(member.id))
+        .map((member) => member.name)
+        .toList();
+    final names = <String>[widget.user.name, ...teammateNames];
+    _driverController.text = names.join(', ');
+  }
+
+  Future<void> _loadCurrentBalance() async {
+    try {
+      print('[AddFuelCard] Loading current balance...');
+      final balance =
+          await _fuelCardService.getCurrentCardBalance(widget.ambulanceId);
+      setState(() {
+        _currentBalance = balance;
+      });
+      print('[AddFuelCard] Current balance: $_currentBalance TND');
+    } catch (e) {
+      print('[AddFuelCard] Error loading balance: $e');
+    }
   }
 
   @override
   void dispose() {
     _dateController.dispose();
     _driverController.dispose();
-    _quantityController.dispose();
-    _amountController.dispose();
-    _cardNumberController.dispose();
+    _soldesPaidController.dispose();
     _notesController.dispose();
+    _kilometrageController.dispose();
     super.dispose();
   }
 
@@ -81,7 +128,7 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
   void _submitForm() async {
     print('[AddFuelCard] Submit button pressed');
     print('[AddFuelCard] Form valid: ${_formKey.currentState?.validate()}');
-    
+
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
       print('[AddFuelCard] Setting loading state to true');
@@ -99,21 +146,19 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
           'ambulance_id': widget.ambulanceId,
           'date': isoDate,
           'driver_name': _driverController.text,
-          'fuel_amount': double.tryParse(_quantityController.text) ?? 0,
-          'balance': double.tryParse(_amountController.text) ?? 0,
-          'card_number': _fullCardNumber,
+          'soldes_paid': double.tryParse(_soldesPaidController.text) ?? 0,
           'notes': _notesController.text,
           'user_id': widget.user.id,
+          'kilometrage': double.tryParse(_kilometrageController.text) ?? 0,
         };
 
         print('[AddFuelCard] Form data prepared:');
         print('[AddFuelCard] - Ambulance ID: ${fuelData['ambulance_id']}');
         print('[AddFuelCard] - Date: ${fuelData['date']}');
         print('[AddFuelCard] - Driver: ${fuelData['driver_name']}');
-        print('[AddFuelCard] - Quantity: ${fuelData['fuel_amount']} L');
-        print('[AddFuelCard] - Balance: ${fuelData['balance']} TND');
-        print('[AddFuelCard] - Card (masked): ${_maskCardNumberForDisplay(_fullCardNumber)}');
-        print('[AddFuelCard] - Card (full): $_fullCardNumber');
+        print(
+            '[AddFuelCard] - Soldes Paid (Consumed): ${fuelData['soldes_paid']} TND');
+        print('[AddFuelCard] - Kilometrage: ${fuelData['kilometrage']} km');
         print('[AddFuelCard] - Notes: ${fuelData['notes']}');
 
         // TODO: Call FuelCardService to submit
@@ -157,7 +202,7 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
         foregroundColor: Colors.black,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(context.responsive.paddingValueXLarge),
         child: Form(
           key: _formKey,
           child: Column(
@@ -198,10 +243,13 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                           ),
                           child: Text(
                             'EN SERVICE',
-                            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w700,
+                                ),
                           ),
                         ),
                       ],
@@ -223,7 +271,8 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                 onTap: _selectDate,
                 decoration: InputDecoration(
                   hintText: 'dd/mm/yyyy',
-                  suffixIcon: Icon(Icons.calendar_today, color: AppColors.primary),
+                  suffixIcon:
+                      Icon(Icons.calendar_today, color: AppColors.primary),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -238,7 +287,8 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 ),
                 validator: (value) {
                   print('[AddFuelCard] Date validator - value: "$value"');
@@ -253,10 +303,11 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),
-              TextFormField(
-                controller: _driverController,
-                decoration: InputDecoration(
-                  hintText: 'Nom du conducteur',
+               TextFormField(
+                  controller: _driverController,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    hintText: 'Nom du conducteur',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -271,132 +322,51 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 ),
                 validator: (value) {
                   print('[AddFuelCard] Driver validator - value: "$value"');
                   return value?.isEmpty ?? true ? 'Nom requis' : null;
                 },
               ),
+              if (_companyStaff.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Ajouter d\'autres ambulanciers',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _companyStaff
+                      .map(
+                        (member) => FilterChip(
+                          label: Text(member.name),
+                          selected: _selectedTeammateIds.contains(member.id),
+                          onSelected: (selected) =>
+                              _toggleTeammate(member, selected),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
               const SizedBox(height: 20),
 
-              // Quantity and Amount in row
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Quantité (L)',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _quantityController,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            hintText: '0.00',
-                            suffixText: 'L',
-                            suffixStyle: TextStyle(color: Colors.grey[600]),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey[300]!),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey[300]!),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: AppColors.primary),
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[50],
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          ),
-                          validator: (value) {
-                            print('[AddFuelCard] Quantity validator - value: "$value"');
-                            // Allow empty (will default to 0)
-                            if (value != null && value.isNotEmpty) {
-                              final parsed = double.tryParse(value);
-                              if (parsed == null) {
-                                print('[AddFuelCard] Quantity parse failed');
-                                return 'Quantité invalide';
-                              }
-                            }
-                            return null;
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Solde (TND)',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        TextFormField(
-                          controller: _amountController,
-                          keyboardType: TextInputType.number,
-                          decoration: InputDecoration(
-                            hintText: '0.00',
-                            suffixText: 'TND',
-                            suffixStyle: TextStyle(color: Colors.grey[600]),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey[300]!),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey[300]!),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: AppColors.primary),
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[50],
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          ),
-                          validator: (value) {
-                            print('[AddFuelCard] Amount validator - value: "$value"');
-                            // Allow empty (will default to 0)
-                            if (value != null && value.isNotEmpty) {
-                              final parsed = double.tryParse(value);
-                              if (parsed == null) {
-                                print('[AddFuelCard] Amount parse failed');
-                                return 'Solde invalide';
-                              }
-                            }
-                            return null;
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // Card Number field
+              // Soldes Paid field
               Text(
-                'Numero de Carte',
+                'Soldes (Payé) - TND',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),
               TextFormField(
-                controller: _cardNumberController,
+                controller: _soldesPaidController,
                 keyboardType: TextInputType.number,
-                maxLength: 16, // Only allow 16 digits
                 decoration: InputDecoration(
-                  hintText: 'Entrez les 16 chiffres',
-                  counterText: '', // Hide the counter
+                  hintText: '0.00',
+                  suffixText: 'TND',
+                  suffixStyle: TextStyle(color: Colors.grey[600]),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -411,19 +381,114 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 ),
                 validator: (value) {
-                  final digitsOnly = (value ?? '').replaceAll(RegExp(r'\D'), '');
-                  print('[AddFuelCard] Card validation - input: $value, digits: $digitsOnly, length: ${digitsOnly.length}');
-                  if (digitsOnly.isEmpty) {
-                    return 'Numéro de carte requis';
+                  if (value?.isEmpty ?? true) {
+                    return 'Soldes payé requis';
                   }
-                  if (digitsOnly.length < 16) {
-                    return 'Numéro incomplet (${digitsOnly.length}/16 chiffres)';
+                  if (double.tryParse(value!) == null) {
+                    return 'Montant invalide';
                   }
-                  // Store the verified full card number
-                  _fullCardNumber = digitsOnly;
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+
+              // Solde Restant display
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.green[50],
+                  border: Border.all(color: Colors.green[300]!),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Solde Actuel',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: Colors.grey[700],
+                                  ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${_currentBalance.toStringAsFixed(2)} TND',
+                          style:
+                              Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.green[900],
+                                  ),
+                        ),
+                      ],
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          'Solde Restant',
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: Colors.grey[700],
+                                  ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${(_currentBalance - (double.tryParse(_soldesPaidController.text) ?? 0)).toStringAsFixed(2)} TND',
+                          style:
+                              Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.blue[900],
+                                  ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Kilometrage field
+              Text(
+                'Kilometrage (KM)',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _kilometrageController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  hintText: '0.0',
+                  suffixText: 'km',
+                  suffixStyle: TextStyle(color: Colors.grey[600]),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.grey[300]!),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: AppColors.primary),
+                  ),
+                  filled: true,
+                  fillColor: Colors.grey[50],
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                ),
+                validator: (value) {
+                  if (value?.isEmpty ?? true) return null; // Optional field
+                  if (double.tryParse(value!) == null) {
+                    return 'Kilometrage invalide';
+                  }
                   return null;
                 },
               ),
@@ -454,7 +519,8 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 ),
               ),
               const SizedBox(height: 32),
@@ -492,9 +558,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                       Text(
                         _isLoading ? 'Enregistrement...' : 'Enregistrer',
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
                       ),
                     ],
                   ),
@@ -517,9 +583,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   child: Text(
                     'Annuler',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey[700],
-                    ),
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[700],
+                        ),
                   ),
                 ),
               ),

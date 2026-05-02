@@ -20,8 +20,9 @@ class AmbulanceReportService {
     final pdf = pw.Document();
 
     // Calculate statistics
-    final completedMissions =
-        missions.where((m) => m.ambulanceId == ambulance.id && m.status == 'completed').length;
+    final completedMissions = missions
+        .where((m) => m.ambulanceId == ambulance.id && m.status == 'completed')
+        .length;
     final totalMissionsCount =
         missions.where((m) => m.ambulanceId == ambulance.id).length;
     final accomplishmentRate =
@@ -35,7 +36,8 @@ class AmbulanceReportService {
           // Header
           pw.Container(
             decoration: pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(width: 2, color: PdfColors.blue700)),
+              border: pw.Border(
+                  bottom: pw.BorderSide(width: 2, color: PdfColors.blue700)),
             ),
             padding: const pw.EdgeInsets.only(bottom: 20),
             child: pw.Column(
@@ -108,9 +110,12 @@ class AmbulanceReportService {
                 pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
                   children: [
-                    _buildStatCard('DISPONIBLE', availableCount.toString(), PdfColors.green),
-                    _buildStatCard('EN SERVICE', inServiceCount.toString(), PdfColors.orange),
-                    _buildStatCard('MAINTENANCE', maintenanceCount.toString(), PdfColors.red),
+                    _buildStatCard('DISPONIBLE', availableCount.toString(),
+                        PdfColors.green),
+                    _buildStatCard('EN SERVICE', inServiceCount.toString(),
+                        PdfColors.orange),
+                    _buildStatCard('MAINTENANCE', maintenanceCount.toString(),
+                        PdfColors.red),
                   ],
                 ),
               ],
@@ -153,7 +158,8 @@ class AmbulanceReportService {
                           height: 20,
                           decoration: pw.BoxDecoration(
                             border: pw.Border.all(color: PdfColors.grey300),
-                            borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+                            borderRadius: const pw.BorderRadius.all(
+                                pw.Radius.circular(4)),
                           ),
                           child: pw.Row(
                             children: [
@@ -166,8 +172,8 @@ class AmbulanceReportService {
                                       : accomplishmentRate > 0.5
                                           ? PdfColors.orange
                                           : PdfColors.red,
-                                  borderRadius:
-                                      const pw.BorderRadius.all(pw.Radius.circular(3)),
+                                  borderRadius: const pw.BorderRadius.all(
+                                      pw.Radius.circular(3)),
                                 ),
                               ),
                             ],
@@ -218,15 +224,15 @@ class AmbulanceReportService {
               ),
               headers: [
                 'Conducteur',
-                'Solde (DA)',
-                'Carburant (L)',
+                'Soldes Payé (TND)',
+                'Soldes Restant (TND)',
                 'Date',
               ],
               data: fuelCards
                   .map((card) => [
                         card.driverName,
-                        '${card.balance}',
-                        '${card.fuelAmount}',
+                        '${card.soldesPaid}',
+                        '${card.soldesRestant}',
                         card.date ?? 'N/A',
                       ])
                   .toList(),
@@ -306,7 +312,8 @@ class AmbulanceReportService {
     // Print and save the PDF
     await Printing.sharePdf(
       bytes: await pdf.save(),
-      filename: 'Rapport_${ambulance.ambulanceNumber}_${DateTime.now().toString().split(' ')[0]}.pdf',
+      filename:
+          'Rapport_${ambulance.ambulanceNumber}_${DateTime.now().toString().split(' ')[0]}.pdf',
     );
   }
 

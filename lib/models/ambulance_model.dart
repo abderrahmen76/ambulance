@@ -28,7 +28,7 @@ class Ambulance {
       telephone: json['telephone'] as String?,
       currentMissionId: _toStringNullable(json['current_mission_id']),
       currentDestination: json['current_destination'] as String?,
-      kilometrage: (json['kilometrage'] as num?)?.toDouble(),
+      kilometrage: _toDoubleNullable(json['kilometrage']),
     );
   }
 
@@ -44,6 +44,16 @@ class Ambulance {
     if (value == null) return null;
     if (value is String) return value;
     return value.toString();
+  }
+
+  /// Helper to safely convert any value to nullable double
+  static double? _toDoubleNullable(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    if (value is num) return value.toDouble();
+    return null;
   }
 
   /// Convert Ambulance to JSON

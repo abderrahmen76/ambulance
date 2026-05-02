@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ambulance blue color for notifications -->
+    <color name="ambulance_blue">#2962FF</color>
+    <!-- White for icons -->
+    <color name="white">#FFFFFF</color>
+    <!-- Dark background -->
+    <color name="dark_gray">#1A1A1A</color>
+</resources>

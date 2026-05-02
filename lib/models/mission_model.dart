@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Mission Model
 /// Represents a mission/task for the ambulance
 class Mission {
@@ -6,25 +8,40 @@ class Mission {
   final String missionDate;
   final String fromLocation;
   final String toLocation;
+  final String? patientName;
   final String? patientPhone;
   final String status;
+  final String? dispatchPhase;
   final String priority;
   final String ambulanceId;
+  final String? assignedAmbulanceId;
   final String? driverName;
   final String? startTime;
   final String? endTime;
   final String? infirmierName;
   final String? paymentType;
   final bool? isPaid;
+  final String? guarantee;
   final String? patientFirstName;
   final String? patientLastName;
   final String? patientAge;
+  final String? notes;
+  final String? missionPrice;
   final List<String>? medicalHistory;
   final Map<String, dynamic>? vitalSigns;
-  final List<String>? patientNeeds;
+  final Map<String, dynamic>? patientNeeds;
   final String? fracturesInjuries;
   final String? reportType;
   final String? reportFilledAt;
+  final String? clinicTenantId;
+  final String? clinicName;
+  final String? pickupAddress;
+  final String? destinationAddress;
+  final String? pickupLat;
+  final String? pickupLng;
+  final String? destinationLat;
+  final String? destinationLng;
+  final Map<String, dynamic>? requirements;
 
   Mission({
     required this.id,
@@ -32,54 +49,89 @@ class Mission {
     required this.missionDate,
     required this.fromLocation,
     required this.toLocation,
+    this.patientName,
     this.patientPhone,
     required this.status,
+    this.dispatchPhase,
     required this.priority,
     required this.ambulanceId,
+    this.assignedAmbulanceId,
     this.driverName,
     this.startTime,
     this.endTime,
     this.infirmierName,
     this.paymentType,
     this.isPaid,
+    this.guarantee,
     this.patientFirstName,
     this.patientLastName,
     this.patientAge,
+    this.notes,
+    this.missionPrice,
     this.medicalHistory,
     this.vitalSigns,
     this.patientNeeds,
     this.fracturesInjuries,
     this.reportType,
     this.reportFilledAt,
+    this.clinicTenantId,
+    this.clinicName,
+    this.pickupAddress,
+    this.destinationAddress,
+    this.pickupLat,
+    this.pickupLng,
+    this.destinationLat,
+    this.destinationLng,
+    this.requirements,
   });
 
   /// Factory constructor to create Mission from JSON
   factory Mission.fromJson(Map<String, dynamic> json) {
+    final dispatchPhase = json['dispatch_phase'] as String?;
+    final ambulanceId = _toString(
+      json['assigned_ambulance_id'] ?? json['ambulance_id'],
+    );
+
     return Mission(
       id: _toString(json['id']),
       missionNumber: json['mission_number'] as String? ?? 'N/A',
       missionDate: json['mission_date'] as String? ?? '',
       fromLocation: json['from_location'] as String? ?? '',
       toLocation: json['to_location'] as String? ?? '',
+      patientName: json['patient_name'] as String?,
       patientPhone: json['patient_phone'] as String?,
       status: json['status'] as String? ?? 'pending',
+      dispatchPhase: dispatchPhase,
       priority: json['priority'] as String? ?? 'normal',
-      ambulanceId: _toString(json['ambulance_id']),
+      ambulanceId: ambulanceId,
+      assignedAmbulanceId: _toNullableString(json['assigned_ambulance_id']),
       driverName: json['driver_name'] as String?,
       startTime: json['start_time'] as String?,
       endTime: json['end_time'] as String?,
       infirmierName: json['infirmier_name'] as String?,
       paymentType: json['payment_type'] as String?,
       isPaid: json['payment_status'] as bool?,
+      guarantee: json['guarantee'] as String?,
       patientFirstName: json['patient_first_name'] as String?,
       patientLastName: json['patient_last_name'] as String?,
       patientAge: _toNullableString(json['patient_age']),
+      notes: json['notes'] as String?,
+      missionPrice: _toNullableString(json['mission_price']),
       medicalHistory: _toStringList(json['medical_history']),
       vitalSigns: _toMap(json['vital_signs']),
-      patientNeeds: _toStringList(json['patient_needs']),
+      patientNeeds: _toPatientNeedsMap(json['patient_needs']),
       fracturesInjuries: json['fractures_injuries'] as String?,
       reportType: json['report_type'] as String?,
       reportFilledAt: json['report_filled_at'] as String?,
+      clinicTenantId: _toNullableString(json['clinic_tenant_id']),
+      clinicName: json['clinic_name'] as String?,
+      pickupAddress: json['pickup_address'] as String?,
+      destinationAddress: json['destination_address'] as String?,
+      pickupLat: _toNullableString(json['pickup_lat']),
+      pickupLng: _toNullableString(json['pickup_lng']),
+      destinationLat: _toNullableString(json['destination_lat']),
+      destinationLng: _toNullableString(json['destination_lng']),
+      requirements: _toMap(json['requirements']),
     );
   }
 
@@ -90,26 +142,160 @@ class Mission {
         'mission_date': missionDate,
         'from_location': fromLocation,
         'to_location': toLocation,
+        'patient_name': patientName,
         'patient_phone': patientPhone,
         'status': status,
+        'dispatch_phase': dispatchPhase,
         'priority': priority,
         'ambulance_id': ambulanceId,
+        'assigned_ambulance_id': assignedAmbulanceId,
         'driver_name': driverName,
         'start_time': startTime,
         'end_time': endTime,
         'infirmier_name': infirmierName,
         'payment_type': paymentType,
         'payment_status': isPaid,
+        'guarantee': guarantee,
         'patient_first_name': patientFirstName,
         'patient_last_name': patientLastName,
         'patient_age': patientAge,
+        'notes': notes,
+        'mission_price': missionPrice,
         'medical_history': medicalHistory,
         'vital_signs': vitalSigns,
         'patient_needs': patientNeeds,
         'fractures_injuries': fracturesInjuries,
         'report_type': reportType,
         'report_filled_at': reportFilledAt,
+        'clinic_tenant_id': clinicTenantId,
+        'clinic_name': clinicName,
+        'pickup_address': pickupAddress,
+        'destination_address': destinationAddress,
+        'pickup_lat': pickupLat,
+        'pickup_lng': pickupLng,
+        'destination_lat': destinationLat,
+        'destination_lng': destinationLng,
+        'requirements': requirements,
       };
+
+  Mission copyWith({
+    String? id,
+    String? missionNumber,
+    String? missionDate,
+    String? fromLocation,
+    String? toLocation,
+    String? patientName,
+    String? patientPhone,
+    String? status,
+    String? dispatchPhase,
+    String? priority,
+    String? ambulanceId,
+    String? assignedAmbulanceId,
+    String? driverName,
+    String? startTime,
+    String? endTime,
+    String? infirmierName,
+    String? paymentType,
+    bool? isPaid,
+    String? guarantee,
+    String? patientFirstName,
+    String? patientLastName,
+    String? patientAge,
+    String? notes,
+    String? missionPrice,
+    List<String>? medicalHistory,
+    Map<String, dynamic>? vitalSigns,
+    Map<String, dynamic>? patientNeeds,
+    String? fracturesInjuries,
+    String? reportType,
+    String? reportFilledAt,
+    String? clinicTenantId,
+    String? clinicName,
+    String? pickupAddress,
+    String? destinationAddress,
+    String? pickupLat,
+    String? pickupLng,
+    String? destinationLat,
+    String? destinationLng,
+    Map<String, dynamic>? requirements,
+  }) {
+    return Mission(
+      id: id ?? this.id,
+      missionNumber: missionNumber ?? this.missionNumber,
+      missionDate: missionDate ?? this.missionDate,
+      fromLocation: fromLocation ?? this.fromLocation,
+      toLocation: toLocation ?? this.toLocation,
+      patientName: patientName ?? this.patientName,
+      patientPhone: patientPhone ?? this.patientPhone,
+      status: status ?? this.status,
+      dispatchPhase: dispatchPhase ?? this.dispatchPhase,
+      priority: priority ?? this.priority,
+      ambulanceId: ambulanceId ?? this.ambulanceId,
+      assignedAmbulanceId: assignedAmbulanceId ?? this.assignedAmbulanceId,
+      driverName: driverName ?? this.driverName,
+      startTime: startTime ?? this.startTime,
+      endTime: endTime ?? this.endTime,
+      infirmierName: infirmierName ?? this.infirmierName,
+      paymentType: paymentType ?? this.paymentType,
+      isPaid: isPaid ?? this.isPaid,
+      guarantee: guarantee ?? this.guarantee,
+      patientFirstName: patientFirstName ?? this.patientFirstName,
+      patientLastName: patientLastName ?? this.patientLastName,
+      patientAge: patientAge ?? this.patientAge,
+      notes: notes ?? this.notes,
+      missionPrice: missionPrice ?? this.missionPrice,
+      medicalHistory: medicalHistory ?? this.medicalHistory,
+      vitalSigns: vitalSigns ?? this.vitalSigns,
+      patientNeeds: patientNeeds ?? this.patientNeeds,
+      fracturesInjuries: fracturesInjuries ?? this.fracturesInjuries,
+      reportType: reportType ?? this.reportType,
+      reportFilledAt: reportFilledAt ?? this.reportFilledAt,
+      clinicTenantId: clinicTenantId ?? this.clinicTenantId,
+      clinicName: clinicName ?? this.clinicName,
+      pickupAddress: pickupAddress ?? this.pickupAddress,
+      destinationAddress: destinationAddress ?? this.destinationAddress,
+      pickupLat: pickupLat ?? this.pickupLat,
+      pickupLng: pickupLng ?? this.pickupLng,
+      destinationLat: destinationLat ?? this.destinationLat,
+      destinationLng: destinationLng ?? this.destinationLng,
+      requirements: requirements ?? this.requirements,
+    );
+  }
+
+  String? get pickupGoogleMapsUrl =>
+      requirements?['pickupGoogleMapsUrl']?.toString();
+
+  String? get destinationGoogleMapsUrl =>
+      requirements?['destinationGoogleMapsUrl']?.toString();
+
+  bool get isGuestPatientMission {
+    final requestSource = requirements?['requestSource']?.toString().trim();
+    final guestRequest = requirements?['guestRequest'] == true;
+    return requestSource == 'patient_guest' ||
+        guestRequest ||
+        missionNumber.startsWith('GUEST-');
+  }
+
+  String? get requestedAmbulanceNumber {
+    final value = requirements?['requestedAmbulanceNumber']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String? get requestedCompanyName {
+    final value = requirements?['requestedCompanyName']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String get pickupDisplayLabel {
+    final address = pickupAddress?.trim();
+    if (address != null && address.isNotEmpty) {
+      return address;
+    }
+    if (fromLocation.trim().isNotEmpty) {
+      return fromLocation;
+    }
+    return 'Aucune localisation';
+  }
 
   /// Helper to safely convert any value to string
   static String _toString(dynamic value) {
@@ -130,6 +316,23 @@ class Mission {
     if (value is List) {
       return value.map((item) => item.toString()).toList();
     }
+    if (value is String && value.isNotEmpty) {
+      try {
+        // Handle multi-level JSON encoding
+        dynamic decoded = value;
+        int decodeAttempts = 0;
+        while (decoded is String && decoded.isNotEmpty && decodeAttempts < 3) {
+          decoded = jsonDecode(decoded);
+          decodeAttempts++;
+        }
+
+        if (decoded is List) {
+          return decoded.map((item) => item.toString()).toList();
+        }
+      } catch (e) {
+        return null;
+      }
+    }
     return null;
   }
 
@@ -137,14 +340,85 @@ class Mission {
   static Map<String, dynamic>? _toMap(dynamic value) {
     if (value == null) return null;
     if (value is Map<String, dynamic>) return value;
-    if (value is String) {
+    if (value is String && value.isNotEmpty) {
       try {
-        // Handle JSON string if needed
-        return value as Map<String, dynamic>;
+        // Handle multi-level JSON encoding
+        dynamic decoded = value;
+        int decodeAttempts = 0;
+        while (decoded is String && decoded.isNotEmpty && decodeAttempts < 3) {
+          decoded = jsonDecode(decoded);
+          decodeAttempts++;
+        }
+
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
       } catch (e) {
         return null;
       }
     }
+    return null;
+  }
+
+  /// Helper to convert patient needs data
+  /// Database stores as: [{"name": "Oxygène", "quantity": "2", "type": "...", "children": [...]}, ...]
+  /// Returns the data as-is or converts from JSON string
+  static Map<String, dynamic>? _toPatientNeedsMap(dynamic value) {
+    if (value == null) return null;
+
+    if (value is Map<String, dynamic>) {
+      // Already a Map, return as-is
+      return value;
+    }
+
+    if (value is String && value.isNotEmpty) {
+      try {
+        // Handle multi-level JSON encoding
+        dynamic decoded = value;
+        int decodeAttempts = 0;
+        while (decoded is String && decoded.isNotEmpty && decodeAttempts < 3) {
+          decoded = jsonDecode(decoded);
+          decodeAttempts++;
+        }
+
+        // Handle List format: [{"name": "...", "quantity": "...", "children": [...]}, ...]
+        if (decoded is List) {
+          // Return as-is for PDF to process, but wrap in a map for compatibility
+          // The PDF service expects a Map, but we need to preserve the List structure
+          // Create a Map where each item's name is the key and the full object is the value
+          Map<String, dynamic> result = {};
+          for (var item in decoded) {
+            if (item is Map<String, dynamic> && item.containsKey('name')) {
+              final name = item['name'] as String;
+              // Preserve the entire structure including children
+              result[name] = item;
+            }
+          }
+          return result.isNotEmpty ? result : null;
+        }
+
+        // Handle Map format: {"oxygen": "2", "perfusion": "01", ...}
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+      } catch (e) {
+        return null;
+      }
+    }
+
+    // Handle List format directly (if it's already parsed as a List)
+    if (value is List) {
+      Map<String, dynamic> result = {};
+      for (var item in value) {
+        if (item is Map<String, dynamic> && item.containsKey('name')) {
+          final name = item['name'] as String;
+          // Preserve entire structure including children
+          result[name] = item;
+        }
+      }
+      return result.isNotEmpty ? result : null;
+    }
+
     return null;
   }
 }

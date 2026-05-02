@@ -5,20 +5,20 @@ class FuelCard {
   final String ambulanceId;
   final String date;
   final String driverName;
-  final double fuelAmount;
-  final double balance;
-  final double? rechargeAmount;
+  final double soldesPaid;
+  final double soldesRestant;
   final String? notes;
+  final double? kilometrage;
 
   FuelCard({
     required this.id,
     required this.ambulanceId,
     required this.date,
     required this.driverName,
-    required this.fuelAmount,
-    required this.balance,
-    this.rechargeAmount,
+    this.soldesPaid = 0.0,
+    this.soldesRestant = 0.0,
     this.notes,
+    this.kilometrage,
   });
 
   /// Factory constructor to create FuelCard from JSON
@@ -28,10 +28,10 @@ class FuelCard {
       ambulanceId: _toString(json['ambulance_id']),
       date: json['date'] as String? ?? '',
       driverName: json['driver_name'] as String? ?? 'Unknown',
-      fuelAmount: (json['fuel_amount'] as num?)?.toDouble() ?? 0.0,
-      balance: (json['balance'] as num?)?.toDouble() ?? 0.0,
-      rechargeAmount: (json['recharge_amount'] as num?)?.toDouble(),
+      soldesPaid: _toDoubleNullable(json['soldes_paid']) ?? 0.0,
+      soldesRestant: _toDoubleNullable(json['soldes_restant']) ?? 0.0,
       notes: json['notes'] as String?,
+      kilometrage: _toDoubleNullable(json['kilometrage']),
     );
   }
 
@@ -41,10 +41,10 @@ class FuelCard {
         'ambulance_id': ambulanceId,
         'date': date,
         'driver_name': driverName,
-        'fuel_amount': fuelAmount,
-        'balance': balance,
-        'recharge_amount': rechargeAmount,
+        'soldes_paid': soldesPaid,
+        'soldes_restant': soldesRestant,
         'notes': notes,
+        'kilometrage': kilometrage,
       };
 
   /// Helper to safely convert any value to string
@@ -52,5 +52,15 @@ class FuelCard {
     if (value == null) return '';
     if (value is String) return value;
     return value.toString();
+  }
+
+  /// Helper to safely convert any value to nullable double
+  static double? _toDoubleNullable(dynamic value) {
+    if (value == null) return null;
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    if (value is String) return double.tryParse(value);
+    if (value is num) return value.toDouble();
+    return null;
   }
 }

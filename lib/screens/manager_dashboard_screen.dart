@@ -4,11 +4,18 @@ import '../models/user_model.dart';
 import '../models/mission_model.dart';
 import '../models/ambulance_model.dart';
 import '../services/mission_service.dart';
-import '../services/ambulance_service.dart';
 import '../services/api_client.dart';
+import '../services/auth_service.dart';
+import '../utils/responsive.dart';
+import '../widgets/clinic_dropdown_field.dart';
+import '../widgets/manager_nav_drawer.dart';
 import 'manager_missions_screen.dart';
 import 'manager_ambulances_screen.dart';
+import 'manager_equipment_rentals_screen.dart';
 import 'manager_historique_screen.dart';
+import 'manager_shifts_screen.dart';
+import 'fleet_viewer_map_screen.dart';
+import 'settings/manager_settings_screen_optimized.dart';
 
 class ManagerDashboardScreen extends StatefulWidget {
   final User user;
@@ -22,9 +29,14 @@ class ManagerDashboardScreen extends StatefulWidget {
   State<ManagerDashboardScreen> createState() => _ManagerDashboardScreenState();
 }
 
-class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
+class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
+    with WidgetsBindingObserver {
   final _apiClient = ApiClient();
+  final _missionService = MissionService();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _selectedNavIndex = 0;
+  late final List<Widget>
+      _screens; // 🔥 Created ONCE in initState, never recreated
 
   int totalMissions = 0;
   int activeMissions = 0;
@@ -39,20 +51,106 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   List<Mission> missions = [];
   List<Ambulance> ambulances = [];
 
+  Future<List<dynamic>> _attachClinicNames(List<dynamic> missionRows) async {
+    final clinicTenantIds = missionRows
+        .map((row) => row['clinic_tenant_id']?.toString())
+        .whereType<String>()
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList();
+
+    if (clinicTenantIds.isEmpty) {
+      return missionRows;
+    }
+
+    try {
+      final apiClient = ApiClient();
+      final tenantRows = await apiClient.get(
+        '/rest/v1/tenants',
+        filters: {
+          'id': 'in.(${clinicTenantIds.join(',')})',
+        },
+      );
+
+      final clinicNames = <String, String>{};
+      for (final tenant in tenantRows) {
+        final id = tenant['id']?.toString();
+        final name = tenant['name']?.toString();
+        if (id != null && name != null && name.isNotEmpty) {
+          clinicNames[id] = name;
+        }
+      }
+
+      return missionRows.map((row) {
+        final copy = Map<String, dynamic>.from(row as Map);
+        final clinicTenantId = copy['clinic_tenant_id']?.toString();
+        if (clinicTenantId != null && clinicNames.containsKey(clinicTenantId)) {
+          copy['clinic_name'] = clinicNames[clinicTenantId];
+        }
+        return copy;
+      }).toList();
+    } catch (e) {
+      debugPrint('[ManagerDashboard] Failed to attach clinic names: $e');
+      return missionRows;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    print('[DEBUG] ManagerDashboard initState() called');
+    WidgetsBinding.instance.addObserver(this);
+
+    // 🔥 CREATE NESTED CONTENT SCREENS ONCE - NOT IN BUILD()
+    // Store only the content widgets to persist them
+    // Dashboard is built dynamically so it rebuilds with fresh data when state changes
+    _screens = [
+      Container(), // Placeholder - dashboard built dynamically in _buildContent()
+      ManagerMissionsScreenContent(user: widget.user), // Tab 1: Missions
+      ManagerAmbulancesScreenContent(
+          user: widget.user), // Tab 2: Fleet/Ambulances
+      ManagerEquipmentRentalScreenContent(
+          user: widget.user), // Tab 3: Equipment Rentals
+      ManagerHistoriqueScreenContent(user: widget.user), // Tab 4: Historique
+      ManagerShiftsScreenContent(user: widget.user), // Tab 5: Shifts
+      FleetViewerMapScreen(user: widget.user), // Tab 6: Live Fleet Tracking
+      ManagerSettingsScreenOptimized(user: widget.user), // Tab 7: Settings
+    ];
+    print(
+        '[DEBUG] ManagerDashboard: _screens created with ${_screens.length} widgets');
+
     _loadDashboardData();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      print('[DEBUG] App resumed - lifecycle event detected');
+      debugPrint(
+          '[ManagerDashboardScreen] App resumed, reloading dashboard...');
+      _loadDashboardData();
+      // Dashboard content will trigger nested widget lifecycle events
+      // No need to force rebuild - keep widgets alive with IndexedStack
+    }
   }
 
   Future<void> _loadDashboardData() async {
     try {
       print('🔄 Manager Dashboard: Starting data load...');
+      print('[DEBUG] Current _selectedNavIndex: $_selectedNavIndex');
+      print('[DEBUG] totalMissions before load: $totalMissions');
       final apiClient = ApiClient();
 
       print('📥 Fetching missions...');
-      final missionData = await apiClient.get(SupabaseConfig.missionsTable);
-      print('✅ Missions fetched: ${missionData.length} records');
+        final missionData = await apiClient.get(SupabaseConfig.missionsTable);
+        final enrichedMissionData = await _attachClinicNames(missionData);
+        print('✅ Missions fetched: ${missionData.length} records');
 
       print('📥 Fetching ambulances...');
       final ambulanceData = await apiClient.get(SupabaseConfig.ambulancesTable);
@@ -61,15 +159,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
       // Parse missions with error handling
       print('🔄 Parsing missions...');
       List<Mission> missionList = [];
-      for (int i = 0; i < missionData.length; i++) {
-        try {
-          final mission = Mission.fromJson(missionData[i]);
-          missionList.add(mission);
-        } catch (e) {
-          print('❌ Error parsing mission $i: $e');
-          print('   Data: ${missionData[i]}');
+        for (int i = 0; i < enrichedMissionData.length; i++) {
+          try {
+            final mission = Mission.fromJson(enrichedMissionData[i]);
+            missionList.add(mission);
+          } catch (e) {
+            print('❌ Error parsing mission $i: $e');
+            print('   Data: ${enrichedMissionData[i]}');
+          }
         }
-      }
       print('✅ Parsed ${missionList.length} missions successfully');
 
       // Parse ambulances with error handling
@@ -102,10 +200,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
           }
         }).toList();
 
-        // Calculate revenue from completed missions
+        // Calculate revenue from completed missions (sum actual prices)
         final completedMissionsList =
             missionList.where((m) => m.status == 'completed').toList();
-        double calculatedRevenue = completedMissionsList.length * 150.0;
+        double calculatedRevenue = 0.0;
+        for (var mission in completedMissionsList) {
+          try {
+            final price = double.tryParse(mission.missionPrice ?? '0') ?? 0.0;
+            calculatedRevenue += price;
+          } catch (e) {
+            print('Error parsing mission price: $e');
+          }
+        }
 
         // Calculate free ambulances based on active missions
         final activeMissionsWithAmbulance = missionList
@@ -202,7 +308,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         print('   - Todays missions: ${todayMissions.length}');
         print('   - Ambulances: ${ambulanceList.length}');
 
+        print('[DEBUG] About to call setState()...');
+        print('[DEBUG] totalMissions = ${missionList.length}');
+        print('[DEBUG] totalAmbulances = ${ambulanceList.length}');
+
         setState(() {
+          print('[DEBUG] Inside setState(), updating state variables');
           missions = missionList;
           ambulances = ambulanceList;
           totalMissions = missionList.length; // ALL missions (not filtered)
@@ -210,13 +321,24 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               .where((m) => m.status == 'pending' || m.status == 'accepted')
               .length;
           completedMissions = thisWeekCompleted.length; // This week's completed
-          totalRevenue =
-              thisWeekCompleted.length * 150.0; // This week's revenue
+          // Calculate this week's revenue from actual mission prices
+          double thisWeekRevenue = 0.0;
+          for (var mission in thisWeekCompleted) {
+            try {
+              final price = double.tryParse(mission.missionPrice ?? '0') ?? 0.0;
+              thisWeekRevenue += price;
+            } catch (e) {
+              print('Error parsing mission price: $e');
+            }
+          }
+          totalRevenue = thisWeekRevenue;
           totalAmbulances = ambulanceList.length;
           freeAmbulances = freeAmbList.length;
           missionsWeeklyChangePercent = missionsPercent;
           completedWeeklyChangePercent = completedPercent;
           revenueWeeklyChangePercent = revenuePercent;
+          print(
+              '[DEBUG] setState() completed - totalMissions is now $totalMissions');
         });
 
         print('✅ Dashboard data loaded successfully');
@@ -255,11 +377,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
     );
 
     if (shouldLogout == true && mounted) {
+      // Perform logout and clear persistent session
+      await AuthService().logout();
       Navigator.of(context).pushReplacementNamed('/login');
     }
   }
 
   void _showCreateMissionDialog() {
+    print('\n\n🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫');
+    print('🟫 [_showCreateMissionDialog] ENTRY - DASHBOARD');
+    print('🟫 Mission creation dialog opened from dashboard');
+    print('🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫\n');
+
     final formKey = GlobalKey<FormState>();
     final patientNameController = TextEditingController();
     final patientPhoneController = TextEditingController();
@@ -300,9 +429,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                       children: [
                         Text(
                           'Créer une Nouvelle Mission',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                          style:
+                              Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                         ),
                         IconButton(
                           onPressed: () => Navigator.pop(context),
@@ -311,7 +441,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                       ],
                     ),
                     const SizedBox(height: 20),
-                    Text('Date et Heure', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Date et Heure',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -325,84 +456,124 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Priorité', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Priorité',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
                       value: selectedPriority,
                       decoration: InputDecoration(
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                       items: LocationData.priorityOptions.map((priority) {
-                        return DropdownMenuItem(value: priority, child: Text(priority));
+                        return DropdownMenuItem(
+                            value: priority, child: Text(priority));
                       }).toList(),
                       onChanged: (value) {
-                        if (value != null) setState(() => selectedPriority = value);
+                        if (value != null)
+                          setState(() => selectedPriority = value);
                       },
                     ),
                     const SizedBox(height: 16),
-                    Text('Lieu de Départ', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Lieu de Départ',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
-                    _buildLocationSection('From', selectedFromLocationType, (value) => setState(() => selectedFromLocationType = value!), fromLocationManualController, selectedFromClinic, (value) => setState(() => selectedFromClinic = value!), 'Sfax', (value) {}),
+                    _buildLocationSection(
+                        'From',
+                        selectedFromLocationType,
+                        (value) =>
+                            setState(() => selectedFromLocationType = value!),
+                        fromLocationManualController,
+                        selectedFromClinic,
+                        (value) => setState(() => selectedFromClinic = value!),
+                        'Sfax',
+                        (value) {}),
                     const SizedBox(height: 16),
-                    Text('Lieu de Destination', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Lieu de Destination',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
-                    _buildLocationSection('To', selectedToLocationType, (value) => setState(() => selectedToLocationType = value!), toLocationManualController, selectedToClinic, (value) => setState(() => selectedToClinic = value!), 'Sfax', (value) {}),
+                    _buildLocationSection(
+                        'To',
+                        selectedToLocationType,
+                        (value) =>
+                            setState(() => selectedToLocationType = value!),
+                        toLocationManualController,
+                        selectedToClinic,
+                        (value) => setState(() => selectedToClinic = value!),
+                        'Sfax',
+                        (value) {}),
                     const SizedBox(height: 16),
-                    Text('Nom du Patient', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Nom du Patient',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: patientNameController,
                       decoration: InputDecoration(
                         hintText: 'Nom complet',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Téléphone du Patient', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Téléphone du Patient',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: patientPhoneController,
                       decoration: InputDecoration(
                         hintText: 'Numéro de téléphone',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                       keyboardType: TextInputType.phone,
                     ),
                     const SizedBox(height: 16),
-                    Text('Infirmier/Médecin', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Infirmier/Médecin',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: infirmierController,
                       decoration: InputDecoration(
                         hintText: 'Nom',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Tarif', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Tarif',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: tarifController,
                       decoration: InputDecoration(
                         hintText: 'Montant',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                       keyboardType: TextInputType.number,
                     ),
                     const SizedBox(height: 16),
-                    Text('Notes', style: Theme.of(context).textTheme.labelLarge),
+                    Text('Notes',
+                        style: Theme.of(context).textTheme.labelLarge),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: notesController,
                       decoration: InputDecoration(
                         hintText: 'Notes supplémentaires',
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 12),
                       ),
                       maxLines: 3,
                     ),
@@ -421,6 +592,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                         ElevatedButton(
                           onPressed: () {
                             if (formKey.currentState?.validate() ?? false) {
+                              print(
+                                  '\n🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫');
+                              print(
+                                  '🟫 [Dashboard Dialog] CRÉER BUTTON CLICKED');
+                              print('🟫 Form validation: ✅ PASSED');
+                              print(
+                                  '🟫 Dialog closing and calling _createMissionDirect()');
+                              print(
+                                  '🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫\n');
                               Navigator.pop(context);
                               _createMissionDirect(
                                 generatedMissionNumber ?? 'MISS-AUTO-001',
@@ -458,7 +638,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   Future<String> _generateMissionNumber() async {
     try {
       final missionData = await _apiClient.get(SupabaseConfig.missionsTable);
-      final missions = missionData.map((json) => Mission.fromJson(json)).toList();
+      final missions =
+          missionData.map((json) => Mission.fromJson(json)).toList();
       final now = DateTime.now();
       final datePrefix = now.year.toString() +
           now.month.toString().padLeft(2, '0') +
@@ -525,27 +706,38 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         ),
         const SizedBox(height: 12),
         if (selectedType == 'clinic')
-          DropdownButtonFormField<String>(
+          ClinicDropdownField(
             value: selectedClinic,
-            decoration: InputDecoration(
-              labelText: type == 'From' ? 'Sélectionner une clinique' : 'Destination',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-            ),
-            items: LocationData.clinicsSfax
-                .map((clinic) => DropdownMenuItem(value: clinic, child: Text(clinic)))
-                .toList(),
+            selectedCity: selectedCity,
             onChanged: onClinicChanged,
           )
         else
           TextFormField(
             controller: manualController,
             decoration: InputDecoration(
-              hintText: type == 'From' ? 'Lieu de départ' : 'Lieu de destination',
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              hintText:
+                  type == 'From' ? 'Lieu de départ' : 'Lieu de destination',
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             ),
           ),
       ],
     );
+  }
+
+  /// Map priority from UI format to database format
+  /// UI uses: normal, urgent, urgence
+  /// Database expects: empty/null for normal, 'urgent' for high priority
+  String? _mapPriority(String uiPriority) {
+    final priority = uiPriority.toLowerCase().trim();
+    // Pass through all priority values directly
+    // Supabase CHECK constraint should allow:
+    // normal, urgent, urgence, IRM, scanner, coro, alerte thrombolyse,
+    // transfert, dialyse, deces, scintigraphie, oxygenotherapie
+    if (priority.isEmpty) {
+      return null; // NULL for empty priority
+    }
+    return priority;
   }
 
   Future<void> _createMissionDirect(
@@ -559,33 +751,70 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
     String notes,
   ) async {
     try {
-      final body = {
-        'mission_number': missionNumber,
-        'mission_date': DateTime.now().toString(),
-        'from_location': fromLocation,
-        'to_location': toLocation,
-        'priority': priority,
-        'status': 'active',
-      };
-      if (patientName.isNotEmpty) body['patient_first_name'] = patientName;
-      if (patientPhone.isNotEmpty) body['patient_phone'] = patientPhone;
-      if (infirmierName.isNotEmpty) body['infirmier_name'] = infirmierName;
-      if (notes.isNotEmpty) body['fractures_injuries'] = notes;
+      print('\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩');
+      print('🟩 [_createMissionDirect] ENTRY - DASHBOARD MISSION CREATION');
+      print('🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩');
+      print('   📋 All parameters received:');
+      print('      missionNumber: $missionNumber');
+      print('      Patient: $patientName');
+      print('      Priority: $priority');
+      print('      Phone: $patientPhone');
+      print('      Infirmier: $infirmierName');
 
-      await _apiClient.post(SupabaseConfig.missionsTable, body);
+      print('   🔀 Parsing patient name...');
+      // Extract first and last name from patient name
+      final nameParts = patientName.split(' ');
+      final firstName = nameParts.isNotEmpty ? nameParts.first : '';
+      final lastName =
+          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+      print('      firstName: \"$firstName\"');
+      print('      lastName: \"$lastName\"');
+
+      print('   🔗 MissionService type: ${_missionService.runtimeType}');
+      print('   🚀 CALLING _missionService.createMission()...');
+      // Use MissionService to create mission (handles notifications with deduplication)
+      await _missionService.createMission(
+        fromLocation: fromLocation,
+        toLocation: toLocation,
+        priority: priority,
+        patientFirstName: firstName,
+        patientLastName: lastName,
+        patientPhone: patientPhone,
+        infirmierName: infirmierName,
+        missionPrice: '0', // No price in dashboard creation - use 0
+        notes: notes,
+        missionDate: DateTime.now().toIso8601String(),
+      );
+
+      print('   ✅ _missionService.createMission() returned');
+      print('   📊 Reloading dashboard...');
 
       if (mounted) {
+        print('   ✅ Widget mounted - executing post-creation actions');
         _loadDashboardData();
+        print('   ✅ _loadDashboardData() called');
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Mission créée avec succès'), backgroundColor: Colors.green),
+          const SnackBar(
+              content: Text('Mission créée avec succès'),
+              backgroundColor: Colors.green),
         );
+        print('   ✅ SnackBar shown');
+      } else {
+        print('   ⚠️  Widget not mounted');
       }
+      print('🟩 [_createMissionDirect] EXIT - SUCCESS\n');
     } catch (e) {
+      print('   ❌ EXCEPTION in _createMissionDirect: $e');
+      print('   🔗 Stack: ${StackTrace.current}');
       if (mounted) {
+        print('   ⚠️  Showing error snackbar');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: ${e.toString()}'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erreur: ${e.toString()}'),
+              backgroundColor: Colors.red),
         );
       }
+      print('🟩 [_createMissionDirect] EXIT - FAILED\n');
     }
   }
 
@@ -612,7 +841,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                     hintText: 'Ex: AMB-001',
                     border: OutlineInputBorder(),
                   ),
-                  validator: (value) => value?.isEmpty ?? true ? 'Requis' : null,
+                  validator: (value) =>
+                      value?.isEmpty ?? true ? 'Requis' : null,
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -676,13 +906,17 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
       if (mounted) {
         _loadDashboardData();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Ambulance ajoutée avec succès'), backgroundColor: Colors.green),
+          const SnackBar(
+              content: Text('Ambulance ajoutée avec succès'),
+              backgroundColor: Colors.green),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: ${e.toString()}'), backgroundColor: Colors.red),
+          SnackBar(
+              content: Text('Erreur: ${e.toString()}'),
+              backgroundColor: Colors.red),
         );
       }
     }
@@ -690,8 +924,25 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    print(
+        '[DEBUG] Dashboard build() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions');
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: Colors.white,
+      endDrawer: ManagerNavDrawer(
+        user: widget.user,
+        selectedIndex: _selectedNavIndex,
+        scaffoldState: _scaffoldKey,
+        onNavItemTapped: (index) {
+          setState(() {
+            _selectedNavIndex = index;
+            if (index == 0) {
+              _loadDashboardData();
+            }
+          });
+        },
+        onLogout: _logout,
+      ),
       body: Column(
         children: [
           // Header
@@ -700,8 +951,6 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
           Expanded(
             child: _buildContent(),
           ),
-          // Bottom Navigation
-          _buildBottomNav(),
         ],
       ),
     );
@@ -709,7 +958,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
 
   Widget _buildHeader() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: EdgeInsets.symmetric(
+        horizontal: context.responsive.paddingValueLarge,
+        vertical: context.responsive.paddingValueMedium,
+      ),
       decoration: BoxDecoration(
         color: Colors.white,
         border: Border(
@@ -721,31 +973,38 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(8),
+            Expanded(
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      borderRadius: context.responsive.radiusSmall,
+                    ),
+                    child: const Icon(
+                      Icons.local_hospital,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                   ),
-                  child: const Icon(
-                    Icons.local_hospital,
-                    color: Colors.white,
-                    size: 24,
+                  SizedBox(width: context.responsive.spacingSmall),
+                  Expanded(
+                    child: Text(
+                      'AmbuGestion',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'AmbuGestion',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-              ],
+                ],
+              ),
             ),
             Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
                 if (_selectedNavIndex == 1)
                   ElevatedButton.icon(
@@ -755,24 +1014,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: context.responsive.paddingValueSmall,
+                        vertical: context.responsive.paddingValueSmall,
+                      ),
                     ),
                   ),
-                const SizedBox(width: 8),
+                SizedBox(width: context.responsive.spacingSmall),
+                // Hamburger menu button to open right sidebar
                 IconButton(
-                  icon: const Icon(Icons.notifications_none),
+                  icon: const Icon(Icons.menu),
                   color: AppColors.primary,
-                  tooltip: 'Notifications',
-                  onPressed: () {
-                    // TODO: Implement notifications
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.logout),
-                  color: AppColors.primary,
-                  tooltip: 'Déconnexion',
-                  onPressed: _logout,
+                  onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
                 ),
               ],
             ),
@@ -783,27 +1036,24 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   }
 
   Widget _buildContent() {
-    // Return different screens based on selected tab
-    switch (_selectedNavIndex) {
-      case 1:
-        // Missions Tab
-        return ManagerMissionsScreenContent(user: widget.user);
-      case 2:
-        // Fleet/Ambulances Tab
-        return ManagerAmbulancesScreenContent(user: widget.user);
-      case 3:
-        // Historique Tab
-        return ManagerHistoriqueScreenContent(user: widget.user);
-      case 0:
-      default:
-        // Dashboard Tab
-        return _buildDashboardContent();
+    print(
+        '[DEBUG] _buildContent() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions');
+    // 🔥 Dashboard is built DYNAMICALLY so it gets fresh data on setState()
+    // Other tabs persist in _screens to avoid recreation
+    if (_selectedNavIndex == 0) {
+      print('[DEBUG] Building DASHBOARD content (index 0)');
+      print(
+          '[DEBUG] Dashboard will show: $totalMissions missions, $totalAmbulances ambulances');
+      return _buildDashboardContent(); // Builds fresh every time state changes with new data
     }
+
+    print('[DEBUG] Using persisted widget at index $_selectedNavIndex');
+    return _screens[_selectedNavIndex]; // Directly return the persisted widget
   }
 
   Widget _buildDashboardContent() {
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(context.responsive.paddingValueLarge),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -814,20 +1064,20 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                   fontWeight: FontWeight.bold,
                 ),
           ),
-          const SizedBox(height: 4),
+          SizedBox(height: context.responsive.spacingXSmall),
           Text(
             'Surveillance des opérations en temps réel',
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                   color: Colors.grey[600],
                 ),
           ),
-          const SizedBox(height: 24),
+          SizedBox(height: context.responsive.spacingXLarge),
 
           // Stats cards grid - smaller version
           GridView.count(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
+            crossAxisCount: context.responsive.gridColumns2,
+            crossAxisSpacing: context.responsive.spacingMedium,
+            mainAxisSpacing: context.responsive.spacingMedium,
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
             childAspectRatio: 2.2,
@@ -848,7 +1098,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               ),
               _buildSmallStatCard(
                 'REVENUS TOTAUX',
-                '${totalRevenue.toStringAsFixed(0)}€',
+                '${totalRevenue.toStringAsFixed(0)} TND',
                 revenueWeeklyChangePercent > 0
                     ? '+${revenueWeeklyChangePercent.toStringAsFixed(1)}%'
                     : '${revenueWeeklyChangePercent.toStringAsFixed(1)}%',
@@ -862,18 +1112,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 32),
+          SizedBox(height: context.responsive.spacingXLarge),
 
           // Live Fleet Map
-          Text(
-            'Carte de la Flotte en Direct',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-          ),
-          const SizedBox(height: 12),
-          _buildFleetMap(),
-          const SizedBox(height: 32),
+          // Text(
+          //   'Carte de la Flotte en Direct',
+          //   style: Theme.of(context).textTheme.titleMedium?.copyWith(
+          //         fontWeight: FontWeight.bold,
+          //       ),
+          // ),
+          // SizedBox(height: context.responsive.spacingMedium),
+          // _buildFleetMap(),
+          // SizedBox(height: context.responsive.spacingXLarge),
 
           // Missions Aujourd'hui
           Text(
@@ -882,9 +1132,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                   fontWeight: FontWeight.bold,
                 ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: context.responsive.spacingMedium),
           _buildTodayMissions(),
-          const SizedBox(height: 32),
+          SizedBox(height: context.responsive.spacingXLarge),
 
           // Active Fleet Status
           Text(
@@ -893,7 +1143,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                   fontWeight: FontWeight.bold,
                 ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: context.responsive.spacingMedium),
           _buildActiveFleetStatus(),
         ],
       ),
@@ -903,10 +1153,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   Widget _buildStatCard(
       String label, String value, String change, bool isPositive) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(context.responsive.paddingValueMedium),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: context.responsive.radiusLarge,
         border: Border.all(color: Colors.grey[200]!),
         boxShadow: [
           BoxShadow(
@@ -927,7 +1177,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                   fontWeight: FontWeight.w600,
                 ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: context.responsive.spacingSmall),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -1120,7 +1370,21 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
       }
     }).toList();
 
-    if (todayMissions.isEmpty) {
+    // Sort by newest first (descending order)
+    todayMissions.sort((a, b) {
+      try {
+        final dateA = DateTime.parse(a.missionDate);
+        final dateB = DateTime.parse(b.missionDate);
+        return dateB.compareTo(dateA); // Descending order
+      } catch (e) {
+        return 0;
+      }
+    });
+
+    // Limit to first 5 missions
+    final limitedMissions = todayMissions;
+
+    if (limitedMissions.isEmpty) {
       return Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
@@ -1146,25 +1410,36 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.grey[200]!),
       ),
+      height: 300, // Set max height for internal scroll - shows ~5 missions
       child: ListView.builder(
         shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: todayMissions.length,
-        itemBuilder: (context, index) {
-          final mission = todayMissions[index];
-          final statusColor = mission.status == 'completed'
-              ? Colors.green
-              : mission.status == 'accepted'
-                  ? Colors.orange
-                  : Colors.blue;
+        physics: const AlwaysScrollableScrollPhysics(),
+          itemCount:
+              todayMissions.length, // Show ALL missions, user scrolls to see
+          itemBuilder: (context, index) {
+            final mission = todayMissions[index];
+            final clinicName = mission.clinicName?.trim();
+            final clinicLabel = (clinicName != null && clinicName.isNotEmpty)
+                ? clinicName
+                : 'Mission clinique';
+            final isClinicMission = mission.clinicTenantId != null &&
+                mission.clinicTenantId!.isNotEmpty;
+            final statusColor = mission.status == 'completed'
+                ? Colors.green
+                : mission.status == 'accepted'
+                    ? Colors.orange
+                    : Colors.blue;
 
-          return Container(
-            decoration: BoxDecoration(
-              border: index < todayMissions.length - 1
-                  ? Border(bottom: BorderSide(color: Colors.grey[200]!))
-                  : null,
-            ),
-            padding: const EdgeInsets.all(12),
+            return Container(
+              decoration: BoxDecoration(
+                color: isClinicMission
+                    ? const Color(0xFFF8F5FF)
+                    : Colors.transparent,
+                border: index < todayMissions.length - 1
+                    ? Border(bottom: BorderSide(color: Colors.grey[200]!))
+                    : null,
+              ),
+              padding: const EdgeInsets.all(12),
             child: Row(
               children: [
                 Container(
@@ -1176,17 +1451,48 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                   ),
                 ),
                 const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Mission #${mission.missionNumber}',
-                        style:
-                            Theme.of(context).textTheme.labelMedium?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                ),
-                      ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (isClinicMission) ...[
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [
+                                  Color(0xFF7C3AED),
+                                  Color(0xFF2563EB),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              'Clinique: $clinicLabel',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                        Text(
+                          'Mission #${mission.missionNumber}',
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                    color: isClinicMission
+                                        ? const Color(0xFF6D28D9)
+                                        : null,
+                                  ),
+                        ),
                       const SizedBox(height: 4),
                       Text(
                         '${mission.fromLocation} → ${mission.toLocation}',
@@ -1464,39 +1770,122 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
   }
 
   Widget _buildBottomNav() {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
     return Container(
       decoration: BoxDecoration(
         border: Border(
           top: BorderSide(color: Colors.grey[200]!),
         ),
       ),
-      child: BottomNavigationBar(
-        currentIndex: _selectedNavIndex,
-        type: BottomNavigationBarType.fixed,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: 'ACCUEIL',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.assignment),
-            label: 'MISSIONS',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.local_shipping),
-            label: 'PARC',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.history),
-            label: 'HISTORIQUE',
-          ),
-        ],
-        onTap: (index) {
-          setState(() {
-            _selectedNavIndex = index;
-          });
-        },
-      ),
+      child: isMobile
+          ? _buildMobileBottomNav() // Icons only for mobile
+          : _buildTabletBottomNav(), // Full labels for tablet/desktop
+    );
+  }
+
+  /// Mobile navigation - icons only with tooltips
+  Widget _buildMobileBottomNav() {
+    return BottomNavigationBar(
+      currentIndex: _selectedNavIndex,
+      type: BottomNavigationBarType.fixed,
+      showSelectedLabels: false,
+      showUnselectedLabels: false,
+      backgroundColor: Colors.white,
+      selectedItemColor: AppColors.primary,
+      unselectedItemColor: Colors.grey,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.home),
+          label: 'Accueil',
+          tooltip: 'Accueil',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.assignment),
+          label: 'Missions',
+          tooltip: 'Missions',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.local_shipping),
+          label: 'Parc',
+          tooltip: 'Parc/Ambulances',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.medical_services),
+          label: 'Équipements',
+          tooltip: 'Équipements',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.history),
+          label: 'Historique',
+          tooltip: 'Historique',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.badge),
+          label: 'Shifts',
+          tooltip: 'Shifts',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.map),
+          label: 'Tracking',
+          tooltip: 'Suivi Temps Réel',
+        ),
+      ],
+      onTap: (index) {
+        print('[DEBUG] Tab tapped: index=$index (was $_selectedNavIndex)');
+        setState(() {
+          _selectedNavIndex = index;
+          print('[DEBUG] Tab switched to index=$index');
+        });
+      },
+    );
+  }
+
+  /// Tablet/Desktop navigation - full labels
+  Widget _buildTabletBottomNav() {
+    return BottomNavigationBar(
+      currentIndex: _selectedNavIndex,
+      type: BottomNavigationBarType.fixed,
+      backgroundColor: Colors.white,
+      selectedItemColor: AppColors.primary,
+      unselectedItemColor: Colors.grey,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.home),
+          label: 'ACCUEIL',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.assignment),
+          label: 'MISSIONS',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.local_shipping),
+          label: 'PARC',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.medical_services),
+          label: 'ÉQUIPEMENTS',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.history),
+          label: 'HISTORIQUE',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.badge),
+          label: 'SHIFTS',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.map),
+          label: 'TRACKING',
+        ),
+      ],
+      onTap: (index) {
+        print('[DEBUG] Tab tapped: index=$index (was $_selectedNavIndex)');
+        setState(() {
+          _selectedNavIndex = index;
+          print('[DEBUG] Tab switched to index=$index');
+        });
+      },
     );
   }
 }

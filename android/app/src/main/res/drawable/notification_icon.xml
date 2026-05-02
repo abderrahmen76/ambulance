@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ambulance Bedoui Notification Icon -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Medical cross (star of life ambulance symbol) -->
+    <!-- Vertical bar -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M45,15L45,48L15,48L15,60L45,60L45,93L57,93L57,60L87,60L87,48L57,48L57,15Z" />
+</vector>

@@ -1,7 +1,18 @@
 import '../config/constants.dart';
 import '../models/user_model.dart';
+import 'fleet_tracking/background_location_service.dart';
+import 'fleet_tracking/fleet_tracking_service.dart';
+import 'tracking_presence_service.dart';
+import '../utils/jwt_decoder.dart';
 import 'api_client.dart';
+import 'session_security_service.dart';
+import 'fcm_token_service.dart';
+import 'notification_service.dart';
 import 'package:bcrypt/bcrypt.dart';
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
+import 'dart:convert';
 
 /// Authentication Service
 /// Handles user login and authentication with Supabase
@@ -9,6 +20,11 @@ import 'package:bcrypt/bcrypt.dart';
 class AuthService {
   static final AuthService _instance = AuthService._internal();
   final ApiClient _apiClient = ApiClient();
+  final FleetTrackingService _fleetTrackingService = FleetTrackingService();
+  final TrackingPresenceService _trackingPresenceService =
+      TrackingPresenceService();
+  final SessionSecurityService _sessionSecurityService =
+      SessionSecurityService();
 
   // Cache for current user (improves performance)
   User? _cachedUser;
@@ -25,7 +41,9 @@ class AuthService {
   /// Check if user is logged in
   bool get isLoggedIn => _cachedUser != null;
 
-  /// Login with email and password
+  /// Login with email and password - SECURE FLOW
+  /// STEP 1: Authenticate with Supabase Auth first (required for RLS)
+  /// STEP 2: Then query user profile (RLS now allows it - user is authenticated)
   /// Returns User on success, throws exception on failure
   Future<User> login({
     required String email,
@@ -36,147 +54,206 @@ class AuthService {
     print('📧 Email: $email\n');
 
     try {
-      // Step 1: Fetch user by email (single query)
-      print('⏳ [STEP 1] Fetching user from database by email...');
+      // STEP 1: Authenticate with Supabase Auth first (SECURITY CRITICAL!)
+      print('⏳ [STEP 1] Authenticating with Supabase Auth...');
       final step1Timer = Stopwatch()..start();
-      
+
+      final authResponse =
+          await Supabase.instance.client.auth
+              .signInWithPassword(
+                email: email,
+                password: password,
+              )
+              .timeout(
+                const Duration(seconds: 20),
+                onTimeout: () => throw Exception(
+                  'Login timed out after 20 seconds. Please try again.',
+                ),
+              );
+
+      final authenticatedUser = authResponse.user;
+      if (authenticatedUser == null) {
+        throw Exception('Authentication failed. User is null.');
+      }
+
+      step1Timer.stop();
+      print(
+          '✅ [STEP 1] Authenticated with Supabase Auth in ${step1Timer.elapsedMilliseconds}ms');
+      print('   Auth User ID: ${authenticatedUser.id}');
+      print('   Auth Email: ${authenticatedUser.email}');
+      print('   User Metadata: ${authenticatedUser.userMetadata}\n');
+
+      // DEBUG: Check JWT token and metadata
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session != null) {
+        print('🔍 [DEBUG] Current Session JWT:');
+        print('   Access Token exists: ${session.accessToken.isNotEmpty}');
+        print('   Token expiry: ${session.expiresAt}');
+        print('   Token length: ${session.accessToken.length} chars');
+        // Show first 20 chars of token for verification
+        print(
+            '   Token (first 20 chars): ${session.accessToken.substring(0, 20)}...');
+
+        // 🔥 DECODE JWT PAYLOAD TO CHECK FOR user_id AND tenant_id
+        print('\n🔐 [CRITICAL] Checking JWT Payload for RLS fields...');
+        JWTDecoder.printJWTPayload(session.accessToken);
+      } else {
+        print('❌ [DEBUG] No session available after auth!');
+      }
+
+      // IMPORTANT: Verify that the same session is available for API calls
+      print('\n📋 [READY FOR API CALLS] Session is now available');
+      print('   All subsequent REST API calls WILL include JWT token ✅');
+
+      // STEP 2: Now query user profile (RLS will allow this - user is authenticated)
+      // Query by auth_user_id since RLS policy filters on it
+      print('⏳ [STEP 2] Fetching user profile from database...');
+      final step2Timer = Stopwatch()..start();
+
+      final authUserId = authenticatedUser.id;
+      print('   📋 Query Parameters:');
+      print('   - Table: ${SupabaseConfig.usersTable}');
+      print('   - Filter: auth_user_id = eq.$authUserId');
+
       final users = await _apiClient.get(
         SupabaseConfig.usersTable,
         filters: {
-          'email': 'eq.$email',
+          'auth_user_id': 'eq.$authUserId',
         },
       );
 
-      step1Timer.stop();
-      print('✅ [STEP 1] User fetch completed in ${step1Timer.elapsedMilliseconds}ms');
-      print('   Found ${users.length} user(s)\n');
+      step2Timer.stop();
+      print(
+          '✅ [STEP 2] User profile fetch completed in ${step2Timer.elapsedMilliseconds}ms');
+      print('   Found ${users.length} user(s)');
+      if (users.isNotEmpty) {
+        print('   User Data: ${users.first}\n');
+      } else {
+        print('   ⚠️  No users returned (possible RLS policy blocking)\n');
+      }
 
       if (users.isEmpty) {
-        throw Exception('User not found. Please check your email.');
+        throw Exception('User profile not found in database. Check if:\n'
+            '1. RLS policies are enabled on users table\n'
+            '2. RLS policies are blocking queries\n'
+            '3. User exists in public.users table');
       }
 
       final userData = users.first;
       final userId = _toString(userData['id']);
-      final storedPasswordHash = _toString(userData['password']).trim();
       final userName = _toStringNullable(userData['name']) ?? 'User';
+      final userTenantId = _toStringNullable(userData['tenant_id']);
 
-      print('📝 [USER DATA] ID: $userId, Name: $userName');
+      // 🔥 Get role directly from user profile (already fetched!)
+      final userRole = _toStringNullable(userData['role']) ?? 'driver';
+      final userRoleLabel = userRole; // Display label is same as role for now
 
-      // Step 2: Validate password using fast comparison
-      // Note: In production, do this on the backend. For now we use a simple check
-      // WARNING: This is a simplified demo - in production, always validate on backend!
-      print('⏳ [STEP 2] Quick password check...');
-      final step2Timer = Stopwatch()..start();
-      
-      final enteredPasswordTrimmed = password.trim();
-      
-      // For demo: if password starts with $2 (bcrypt), just accept for speed
-      // In PRODUCTION: send credentials to backend /login endpoint instead!
-      bool isValid = false;
-      if (storedPasswordHash.startsWith('\$2')) {
-        // Bcrypt hash detected - for production, validate on backend
-        // For demo purposes with time constraint, we'll do a quick validation
-        isValid = _quickPasswordCheck(enteredPasswordTrimmed, storedPasswordHash);
-      } else {
-        // Plain text password (for testing only)
-        isValid = enteredPasswordTrimmed == storedPasswordHash;
-      }
-
-      if (!isValid) {
-        step2Timer.stop();
-        print('❌ [STEP 2] Password validation failed in ${step2Timer.elapsedMilliseconds}ms\n');
-        throw Exception('Invalid password. Please check your credentials.');
-      }
-
-      step2Timer.stop();
-      print('✅ [STEP 2] Password validated in ${step2Timer.elapsedMilliseconds}ms\n');
-
-      // Step 3: Fetch user role(s) - non-blocking, load in background
-      // Query role_user to get role_id, then join with roles table
-      print('⏳ [STEP 3] Fetching user roles (optional, non-blocking)...');
-      final step3Timer = Stopwatch()..start();
-      
-      String? roleName;
-      String? roleLabel;
-      
-      try {
-        final roleUserData = await _apiClient.get(
-          SupabaseConfig.roleUserTable,
-          filters: {
-            'user_id': 'eq.$userId',
-          },
-        ).timeout(
-          const Duration(milliseconds: 5000),
-          onTimeout: () => throw TimeoutException('Role fetch timeout'),
-        );
-
-        if (roleUserData.isNotEmpty) {
-          final roleId = _toString(roleUserData.first['role_id']);
-
-          // Fetch role details
-          final roles = await _apiClient.get(
-            SupabaseConfig.rolesTable,
-            filters: {
-              'id': 'eq.$roleId',
-            },
-          ).timeout(
-            const Duration(milliseconds: 5000),
-            onTimeout: () => throw TimeoutException('Role detail fetch timeout'),
-          );
-
-          if (roles.isNotEmpty) {
-            roleName = _toStringNullable(roles.first['name']);
-            roleLabel = _toStringNullable(roles.first['label']);
-            print('👑 [ROLE] Name: $roleName, Label: $roleLabel');
-          }
-        }
-        
-        step3Timer.stop();
-        print('✅ [STEP 3] Role fetch completed in ${step3Timer.elapsedMilliseconds}ms\n');
-      } catch (e) {
-        step3Timer.stop();
-        // If role fetching fails, continue without role data
-        // The user can still login, just without role information
-        print('⚠️  [STEP 3] Role fetch failed or timed out (${step3Timer.elapsedMilliseconds}ms): $e');
-        print('   Continuing without role data...\n');
-      }
+      print(
+          '📝 [USER DATA] ID: $userId, Name: $userName, Tenant: $userTenantId, Role: $userRole');
 
       // Create user object and cache it
       print('💾 [CACHING] Caching user in memory...');
       final cacheTimer = Stopwatch()..start();
-      
+
       final user = User(
         id: userId,
         name: userName,
         email: email,
-        role: roleName,
-        roleLabel: roleLabel,
+        role: userRole,
+        roleLabel: userRoleLabel,
+        tenantId: userTenantId,
       );
 
       _cachedUser = user;
-      
+
+      await _saveLegacyUserToStorage(user);
+      await _sessionSecurityService.registerCurrentDeviceSession();
+
+      // Register FCM token for push notifications (mobile only)
+      // Skip on Web - Firebase Messaging doesn't work properly with web interop
+      if (!kIsWeb) {
+        Future(() async {
+          try {
+            debugPrint('🔔 [AUTH] Starting background FCM registration');
+
+            await FCMTokenService().registerFCMToken(user).timeout(
+              const Duration(seconds: 15),
+              onTimeout: () {
+                debugPrint('🔔 [AUTH] FCM registration timeout');
+                return;
+              },
+            );
+
+            debugPrint('🔔 [AUTH] FCM registration completed');
+          } catch (e) {
+            debugPrint('🔔 [AUTH] FCM error (caught): $e');
+            // Silently ignore
+          }
+        });
+      } else {
+        debugPrint('🌐 [AUTH] Skipping FCM on Web');
+      }
+
       cacheTimer.stop();
       print('✅ [CACHING] User cached in ${cacheTimer.elapsedMilliseconds}ms\n');
 
       mainStopwatch.stop();
       print('═══════════════════════════════════════════════════════');
       print('🎉 [SUCCESS] Authentication complete!');
-      print('⏱️  Total time: ${mainStopwatch.elapsedMilliseconds}ms (${(mainStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)');
+      print(
+          '⏱️  Total time: ${mainStopwatch.elapsedMilliseconds}ms (${(mainStopwatch.elapsedMilliseconds / 1000).toStringAsFixed(2)}s)');
       print('═══════════════════════════════════════════════════════\n');
 
       return user;
     } catch (e) {
       mainStopwatch.stop();
       print('═══════════════════════════════════════════════════════');
-      print('❌ [FAILURE] Authentication failed after ${mainStopwatch.elapsedMilliseconds}ms');
+      print(
+          '❌ [FAILURE] Authentication failed after ${mainStopwatch.elapsedMilliseconds}ms');
       print('⚠️  Error: $e');
       print('═══════════════════════════════════════════════════════\n');
       rethrow;
     }
   }
 
-  /// Logout - clears cached user
-  void logout() {
+  /// Logout - clears cached user and persistent storage
+  Future<void> logout() async {
+    // Remove FCM token from database if user is logged in
+    if (_cachedUser != null && _cachedUser!.id != null) {
+      try {
+        final userId = _cachedUser!.id;
+
+        // Get the current FCM token
+        final fcmToken = await NotificationService.instance.getFcmToken();
+
+        if (fcmToken != null) {
+          debugPrint('🚪 [AUTH] Logout - Removing FCM token from database...');
+
+          // Delete this device's FCM token from database using filters
+          await _apiClient.deleteWithFilters(
+            'user_fcm_tokens',
+            {
+              'user_id': 'eq.$userId',
+              'fcm_token': 'eq.$fcmToken',
+            },
+          );
+
+          debugPrint('✅ [AUTH] FCM token removed for user: $userId');
+        }
+      } catch (e) {
+        debugPrint('⚠️  [AUTH] Error removing FCM token: $e');
+        // Continue with logout even if token removal fails
+      }
+    }
+
+    await _stopAllTrackingRuntime();
+    try {
+      await Supabase.instance.client.auth.signOut();
+    } catch (e) {
+      debugPrint('⚠️  [AUTH] Error during Supabase signOut: $e');
+    }
+    await _clearLegacyUserFromStorage();
+    _sessionSecurityService.clearSensitiveAccessWindow();
     _cachedUser = null;
   }
 
@@ -191,17 +268,6 @@ class AuthService {
       // If bcrypt fails, fallback to simple comparison for testing
       return enteredPassword.trim() == storedPasswordHash.trim();
     }
-  }
-
-  /// Quick password check for demo purposes
-  /// In production, ALWAYS validate on backend to avoid blocking on bcrypt!
-  bool _quickPasswordCheck(String enteredPassword, String bcryptHash) {
-    // For demo: Accept any password if bcrypt is detected
-    // This prevents 35+ second UI freeze from bcrypt on client
-    // IMPORTANT: In production, send to backend for validation!
-    print('   ⚠️  SECURITY NOTE: Using quick check for demo (bcrypt detected)');
-    print('   In PRODUCTION: Implement backend login endpoint to validate passwords!');
-    return true; // Auto-accept for now to demonstrate speed
   }
 
   /// Helper to safely convert any value to string
@@ -238,5 +304,138 @@ class AuthService {
   /// Clear cache (for testing or forced logout)
   void clearCache() {
     _cachedUser = null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // PERSISTENT STORAGE METHODS
+  // ═══════════════════════════════════════════════════════════════════
+
+  static const String _legacyUserStorageKey = 'cached_user';
+
+  Future<void> _saveLegacyUserToStorage(User user) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _legacyUserStorageKey,
+        jsonEncode(user.toJson()),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _clearLegacyUserFromStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_legacyUserStorageKey);
+    } catch (_) {}
+  }
+
+  Future<User?> _loadUserProfileFromCurrentSession() async {
+    final session = Supabase.instance.client.auth.currentSession;
+    if (session == null) {
+      return null;
+    }
+
+    final authUserId = session.user.id;
+    final users = await _apiClient.get(
+      SupabaseConfig.usersTable,
+      filters: {
+        'auth_user_id': 'eq.$authUserId',
+      },
+      limit: 1,
+    );
+
+    if (users.isEmpty) {
+      return null;
+    }
+
+    final userData = users.first;
+    return User(
+      id: _toString(userData['id']),
+      name: _toStringNullable(userData['name']) ?? 'User',
+      email: _toStringNullable(userData['email']) ?? session.user.email ?? '',
+      role: _toStringNullable(userData['role']) ?? 'driver',
+      roleLabel: _toStringNullable(userData['role']) ?? 'driver',
+      tenantId: _toStringNullable(userData['tenant_id']),
+    );
+  }
+
+  /// Restore user session from persistent storage on app startup
+  Future<void> restoreSessionOnStartup() async {
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      if (session == null) {
+        print('ℹ️  [SESSION] No Supabase session to restore');
+        await _clearLegacyUserFromStorage();
+        await _stopAllTrackingRuntime();
+        return;
+      }
+
+      await _sessionSecurityService.ensureFreshSession(
+        minRemaining: const Duration(minutes: 10),
+      );
+      _cachedUser = await _loadUserProfileFromCurrentSession();
+      if (_cachedUser != null) {
+        print('✅ [SESSION] User session restored on startup');
+        await _saveLegacyUserToStorage(_cachedUser!);
+        await _sessionSecurityService.registerCurrentDeviceSession();
+        await _sessionSecurityService.assertCurrentDeviceSessionActive();
+
+        // Register FCM token on session restore (mobile only)
+        if (!kIsWeb && _cachedUser != null) {
+          debugPrint(
+              '🔔 [SESSION] Starting FCM registration after session restore');
+          Future(() async {
+            try {
+              await FCMTokenService().registerFCMToken(_cachedUser!).timeout(
+                const Duration(seconds: 15),
+                onTimeout: () {
+                  debugPrint('🔔 [SESSION] FCM registration timeout');
+                  return;
+                },
+              );
+              debugPrint('🔔 [SESSION] FCM registration completed');
+            } catch (e) {
+              debugPrint('🔔 [SESSION] FCM error: $e');
+            }
+          });
+        }
+      } else {
+        print('ℹ️  [SESSION] No user profile could be restored');
+        await _stopAllTrackingRuntime();
+        try {
+          await Supabase.instance.client.auth.signOut();
+        } catch (_) {}
+      }
+    } catch (e) {
+      print('❌ [SESSION] Error restoring session: $e');
+      _cachedUser = null;
+      await _stopAllTrackingRuntime();
+      try {
+        await Supabase.instance.client.auth.signOut();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _stopAllTrackingRuntime() async {
+    try {
+      debugPrint('🧹 [AUTH] Cleaning tracking runtime');
+      await _fleetTrackingService.hardResetRuntime();
+    } catch (e) {
+      debugPrint('⚠️  [AUTH] Failed to reset fleet tracking runtime: $e');
+    }
+
+    try {
+      if (await BackgroundLocationService.isServiceRunning()) {
+        await BackgroundLocationService.stopBackgroundService();
+      }
+    } catch (e) {
+      debugPrint('⚠️  [AUTH] Failed to stop background location service: $e');
+    }
+
+    try {
+      _trackingPresenceService.dispose();
+    } catch (e) {
+      debugPrint('⚠️  [AUTH] Failed to dispose tracking presence: $e');
+    }
   }
 }

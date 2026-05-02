@@ -4,7 +4,9 @@ import '../models/user_model.dart';
 import '../models/mission_model.dart';
 import '../models/ambulance_model.dart';
 import '../services/api_client.dart';
+import '../services/pdf_service.dart';
 import '../config/constants.dart';
+import '../utils/responsive.dart';
 
 class ManagerHistoriqueScreenContent extends StatefulWidget {
   final User user;
@@ -20,7 +22,7 @@ class ManagerHistoriqueScreenContent extends StatefulWidget {
 }
 
 class _ManagerHistoriqueScreenContentState
-    extends State<ManagerHistoriqueScreenContent> {
+    extends State<ManagerHistoriqueScreenContent> with WidgetsBindingObserver {
   final _apiClient = ApiClient();
   late Future<List<Mission>> _missionsFuture;
   late Future<List<Ambulance>> _ambulancesFuture;
@@ -31,13 +33,50 @@ class _ManagerHistoriqueScreenContentState
   String? _selectedAmbulance;
   String? _selectedDriver;
   String? _selectedStatus;
+  String? _selectedPaymentType;
   List<Ambulance> _ambulances = [];
   Set<String> _drivers = {};
-  final List<String> _statuses = ['completed', 'active', 'canceled', 'pending'];
+  final List<String> _statuses = [
+    'completed',
+    'active',
+    'cancelled',
+    'pending'
+  ];
+  final List<String> _paymentTypes = ['cash', 'charge'];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _reloadHistoriqueData();
+
+    // 🔥 CRITICAL FIX: Reload after widget is fully built
+    // This prevents lifecycle event race conditions when widget is recreated
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        debugPrint(
+            '[ManagerHistoriqueScreenContent] Post-frame callback: reloading historique data');
+        _reloadHistoriqueData();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint(
+          '[ManagerHistoriqueScreen] App resumed, reloading historique...');
+      _reloadHistoriqueData();
+    }
+  }
+
+  void _reloadHistoriqueData() {
     _missionsFuture = _getAllMissions();
     _ambulancesFuture = _getAllAmbulances();
     _loadFilterData();
@@ -90,7 +129,8 @@ class _ManagerHistoriqueScreenContentState
           return false;
         }
         // Include entire end date by checking against next day
-        if (_endDate != null && missionDate.isAfter(_endDate!.add(Duration(days: 1)))) {
+        if (_endDate != null &&
+            missionDate.isAfter(_endDate!.add(Duration(days: 1)))) {
           return false;
         }
 
@@ -110,6 +150,12 @@ class _ManagerHistoriqueScreenContentState
           return false;
         }
 
+        // Filter by payment type
+        if (_selectedPaymentType != null &&
+            mission.paymentType != _selectedPaymentType) {
+          return false;
+        }
+
         return true;
       } catch (e) {
         return false;
@@ -123,7 +169,7 @@ class _ManagerHistoriqueScreenContentState
         return Colors.green;
       case 'active':
         return Colors.blue;
-      case 'canceled':
+      case 'cancelled':
         return Colors.red;
       case 'pending':
         return Colors.orange;
@@ -138,12 +184,34 @@ class _ManagerHistoriqueScreenContentState
         return 'Complétée';
       case 'active':
         return 'Active';
-      case 'canceled':
+      case 'cancelled':
         return 'Annulée';
       case 'pending':
         return 'En attente';
       default:
         return status;
+    }
+  }
+
+  String _getPaymentTypeLabel(String paymentType) {
+    switch (paymentType.toLowerCase()) {
+      case 'cash':
+        return 'Cash';
+      case 'charge':
+        return 'Sur Dossier';
+      default:
+        return paymentType;
+    }
+  }
+
+  IconData _getPaymentTypeIcon(String paymentType) {
+    switch (paymentType.toLowerCase()) {
+      case 'cash':
+        return Icons.payments;
+      case 'charge':
+        return Icons.description;
+      default:
+        return Icons.payment;
     }
   }
 
@@ -167,6 +235,7 @@ class _ManagerHistoriqueScreenContentState
 
   @override
   Widget build(BuildContext context) {
+    final responsive = context.responsive;
     return RefreshIndicator(
       onRefresh: () async {
         setState(() {
@@ -175,41 +244,60 @@ class _ManagerHistoriqueScreenContentState
         });
         await _loadFilterData();
       },
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Title
-            Text(
-              'Historique des Missions',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: responsive.paddingLarge,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Title
+                  Text(
+                    'Historique des Missions',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                   ),
+                  SizedBox(height: responsive.spacingLarge),
+
+                  // Filters Section
+                  _buildFiltersSection(),
+                  SizedBox(height: responsive.spacingLarge),
+                ],
+              ),
             ),
-            const SizedBox(height: 20),
+          ),
+          // Missions List
+          FutureBuilder<List<Mission>>(
+            future: _missionsFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return SliverToBoxAdapter(
+                  child: const Center(child: CircularProgressIndicator()),
+                );
+              }
 
-            // Filters Section
-            _buildFiltersSection(),
-            const SizedBox(height: 20),
+              if (snapshot.hasError) {
+                return SliverToBoxAdapter(
+                  child: Center(child: Text('Erreur: ${snapshot.error}')),
+                );
+              }
 
-            // Missions List
-            FutureBuilder<List<Mission>>(
-              future: _missionsFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
+              final allMissions = snapshot.data ?? [];
+              final filteredMissions = _filterMissions(allMissions);
+              // Order by newest missionDate on top
+              filteredMissions.sort((a, b) {
+                final dateA =
+                    DateTime.tryParse(a.missionDate) ?? DateTime(1970);
+                final dateB =
+                    DateTime.tryParse(b.missionDate) ?? DateTime(1970);
+                return dateB.compareTo(dateA);
+              });
 
-                if (snapshot.hasError) {
-                  return Center(child: Text('Erreur: ${snapshot.error}'));
-                }
-
-                final allMissions = snapshot.data ?? [];
-                final filteredMissions = _filterMissions(allMissions);
-
-                if (filteredMissions.isEmpty) {
-                  return Center(
+              if (filteredMissions.isEmpty) {
+                return SliverToBoxAdapter(
+                  child: Center(
                     child: Padding(
                       padding: const EdgeInsets.symmetric(vertical: 48),
                       child: Column(
@@ -230,35 +318,42 @@ class _ManagerHistoriqueScreenContentState
                         ],
                       ),
                     ),
-                  );
-                }
-
-                return Column(
-                  children: [
-                    // Summary
-                    _buildSummaryPanel(filteredMissions),
-                    const SizedBox(height: 20),
-
-                    // Missions List
-                    ...filteredMissions.map((mission) {
-                      return _buildMissionCard(mission);
-                    }).toList(),
-                  ],
+                  ),
                 );
-              },
-            ),
-          ],
-        ),
+              }
+
+              return SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                      horizontal: context.responsive.spacingLarge),
+                  child: Column(
+                    children: [
+                      // Summary
+                      _buildSummaryPanel(filteredMissions, _selectedAmbulance),
+                      const SizedBox(height: 20),
+
+                      // Missions List
+                      ...filteredMissions.map((mission) {
+                        return _buildMissionCard(mission);
+                      }).toList(),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildFiltersSection() {
+    final responsive = context.responsive;
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: responsive.paddingMedium,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: responsive.radiusLarge,
         border: Border.all(color: Colors.grey[200]!),
         boxShadow: [
           BoxShadow(
@@ -274,13 +369,13 @@ class _ManagerHistoriqueScreenContentState
           Text(
             'FILTRES',
             style: TextStyle(
-              fontSize: 12,
+              fontSize: responsive.fontSizeSmall,
               fontWeight: FontWeight.bold,
               color: Colors.grey[700],
               letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(height: 16),
+          SizedBox(height: responsive.spacingMedium),
 
           // Date Range Filter
           GestureDetector(
@@ -295,7 +390,7 @@ class _ManagerHistoriqueScreenContentState
                 children: [
                   Icon(Icons.calendar_today,
                       color: AppColors.primary, size: 20),
-                  const SizedBox(width: 12),
+                  SizedBox(width: context.responsive.spacingMedium),
                   Expanded(
                     child: Text(
                       _startDate != null && _endDate != null
@@ -305,7 +400,7 @@ class _ManagerHistoriqueScreenContentState
                         color: _startDate != null
                             ? Colors.black
                             : Colors.grey[600],
-                        fontSize: 13,
+                        fontSize: context.responsive.fontSizeSmall,
                       ),
                     ),
                   ),
@@ -324,7 +419,7 @@ class _ManagerHistoriqueScreenContentState
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: context.responsive.spacingMedium),
 
           // Ambulance Filter
           DropdownButtonFormField<String>(
@@ -342,15 +437,16 @@ class _ManagerHistoriqueScreenContentState
               });
             },
             decoration: InputDecoration(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: context.responsive.spacingMedium,
+                  vertical: context.responsive.spacingSmall),
+              border: OutlineInputBorder(
+                  borderRadius: context.responsive.radiusMedium),
               prefixIcon: Icon(Icons.local_shipping,
                   color: AppColors.primary, size: 20),
             ),
           ),
-          const SizedBox(height: 12),
+          SizedBox(height: context.responsive.spacingMedium),
 
           // Driver Filter
           DropdownButtonFormField<String>(
@@ -407,12 +503,54 @@ class _ManagerHistoriqueScreenContentState
               });
             },
             decoration: InputDecoration(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: context.responsive.spacingMedium,
+                  vertical: context.responsive.spacingSmall),
+              border: OutlineInputBorder(
+                  borderRadius: context.responsive.radiusMedium),
               prefixIcon:
                   Icon(Icons.check_circle, color: AppColors.primary, size: 20),
+            ),
+          ),
+          SizedBox(height: context.responsive.spacingMedium),
+
+          // Payment Type Filter
+          DropdownButtonFormField<String>(
+            value: _selectedPaymentType,
+            hint: const Text('Mode de paiement'),
+            items: _paymentTypes
+                .map((paymentType) => DropdownMenuItem(
+                      value: paymentType,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _getPaymentTypeIcon(paymentType),
+                            size: 16,
+                            color: AppColors.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            _getPaymentTypeLabel(paymentType),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ))
+                .toList(),
+            onChanged: (value) {
+              setState(() {
+                _selectedPaymentType = value;
+              });
+            },
+            decoration: InputDecoration(
+              contentPadding: EdgeInsets.symmetric(
+                  horizontal: context.responsive.spacingMedium,
+                  vertical: context.responsive.spacingSmall),
+              border: OutlineInputBorder(
+                  borderRadius: context.responsive.radiusMedium),
+              prefixIcon:
+                  Icon(Icons.payment, color: AppColors.primary, size: 20),
             ),
           ),
 
@@ -420,9 +558,10 @@ class _ManagerHistoriqueScreenContentState
           if (_startDate != null ||
               _selectedAmbulance != null ||
               _selectedDriver != null ||
-              _selectedStatus != null)
+              _selectedStatus != null ||
+              _selectedPaymentType != null)
             Padding(
-              padding: const EdgeInsets.only(top: 12),
+              padding: EdgeInsets.only(top: context.responsive.spacingMedium),
               child: SizedBox(
                 width: double.infinity,
                 child: TextButton(
@@ -433,6 +572,7 @@ class _ManagerHistoriqueScreenContentState
                       _selectedAmbulance = null;
                       _selectedDriver = null;
                       _selectedStatus = null;
+                      _selectedPaymentType = null;
                     });
                   },
                   child: const Text('Réinitialiser les filtres'),
@@ -444,53 +584,262 @@ class _ManagerHistoriqueScreenContentState
     );
   }
 
-  Widget _buildSummaryPanel(List<Mission> missions) {
+  Widget _buildSummaryPanel(
+      List<Mission> missions, String? selectedAmbulanceId) {
+    final responsive = context.responsive;
     final completed = missions.where((m) => m.status == 'completed').length;
     final active = missions.where((m) => m.status == 'active').length;
-    final canceled = missions.where((m) => m.status == 'canceled').length;
+    final canceled = missions.where((m) => m.status == 'cancelled').length;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppColors.primary.withOpacity(0.1),
-            AppColors.primary.withOpacity(0.05)
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+    // Get selected ambulance info if filtered
+    String? selectedAmbulanceName;
+    if (selectedAmbulanceId != null) {
+      try {
+        final ambulance = _ambulances.firstWhere(
+          (a) => a.id == selectedAmbulanceId,
+          orElse: () => Ambulance(
+            id: '',
+            ambulanceNumber: 'N/A',
+          ),
+        );
+        selectedAmbulanceName = ambulance.ambulanceNumber;
+      } catch (e) {
+        selectedAmbulanceName = 'N/A';
+      }
+    }
+
+    // Calculate performance metrics for selected ambulance
+    double totalEarnings = 0;
+    final completedMissions =
+        missions.where((m) => m.status == 'completed').toList();
+    for (var mission in completedMissions) {
+      try {
+        final price = double.tryParse(mission.missionPrice ?? '0') ?? 0;
+        totalEarnings += price;
+      } catch (e) {
+        // Skip invalid prices
+      }
+    }
+    final avgEarnings = completedMissions.isNotEmpty
+        ? totalEarnings / completedMissions.length
+        : 0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Ambulance filter header or general header
+        Container(
+          padding: responsive.paddingSmall,
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.1),
+            border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                selectedAmbulanceName != null
+                    ? Icons.local_shipping
+                    : Icons.info,
+                color: AppColors.primary,
+                size: 18,
+              ),
+              SizedBox(width: responsive.spacingSmall),
+              Text(
+                selectedAmbulanceName != null
+                    ? 'Statistiques pour'
+                    : 'Statistiques',
+                style: TextStyle(
+                  fontSize: responsive.fontSizeSmall,
+                  color: Colors.grey[600],
+                ),
+              ),
+              if (selectedAmbulanceName != null) ...[
+                SizedBox(width: responsive.spacingSmall),
+                Text(
+                  selectedAmbulanceName,
+                  style: TextStyle(
+                    fontSize: responsive.fontSizeSmall,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ] else ...[
+                SizedBox(width: responsive.spacingSmall),
+                Text(
+                  'générales',
+                  style: TextStyle(
+                    fontSize: responsive.fontSizeSmall,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+        SizedBox(height: responsive.spacingMedium),
+        Container(
+          padding: responsive.paddingMedium,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                AppColors.primary.withOpacity(0.1),
+                AppColors.primary.withOpacity(0.05)
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: responsive.radiusLarge,
+            border: Border.all(color: AppColors.primary.withOpacity(0.3)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildSummaryStat(
+                  'Total', missions.length.toString(), Colors.blue),
+              _buildSummaryStat(
+                  'Complétées', completed.toString(), Colors.green),
+              _buildSummaryStat('Actives', active.toString(), Colors.orange),
+              _buildSummaryStat('Annulées', canceled.toString(), Colors.red),
+            ],
+          ),
+        ),
+        // Performance/Earnings section - always visible
+        SizedBox(height: responsive.spacingMedium),
+        Container(
+          padding: responsive.paddingMedium,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: responsive.radiusLarge,
+            border: Border.all(color: Colors.grey[200]!),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.05),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'PERFORMANCE',
+                style: TextStyle(
+                  fontSize: responsive.fontSizeSmall,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[700],
+                  letterSpacing: 0.5,
+                ),
+              ),
+              SizedBox(height: responsive.spacingMedium),
+              GridView.count(
+                crossAxisCount: 2,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                crossAxisSpacing: responsive.spacingMedium,
+                mainAxisSpacing: responsive.spacingMedium,
+                childAspectRatio: 1.2,
+                children: [
+                  _buildPerformanceStat(
+                    'Revenus Total',
+                    '${totalEarnings.toStringAsFixed(2)} DT',
+                    Colors.green,
+                    Icons.attach_money,
+                    responsive,
+                  ),
+                  _buildPerformanceStat(
+                    'Revenu Moyen',
+                    '${avgEarnings.toStringAsFixed(2)} DT',
+                    Colors.blue,
+                    Icons.trending_up,
+                    responsive,
+                  ),
+                  _buildPerformanceStat(
+                    'Missions Complétées',
+                    completedMissions.length.toString(),
+                    Colors.green,
+                    Icons.check_circle,
+                    responsive,
+                  ),
+                  _buildPerformanceStat(
+                    'Taux Complétude',
+                    missions.isNotEmpty
+                        ? '${((completedMissions.length / missions.length) * 100).toStringAsFixed(0)}%'
+                        : 'N/A',
+                    Colors.orange,
+                    Icons.percent,
+                    responsive,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPerformanceStat(
+    String label,
+    String value,
+    Color color,
+    IconData icon,
+    var responsive,
+  ) {
+    return Container(
+      padding: responsive.paddingSmall,
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        border: Border.all(color: color.withOpacity(0.2)),
+        borderRadius: BorderRadius.circular(8),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _buildSummaryStat('Total', missions.length.toString(), Colors.blue),
-          _buildSummaryStat('Complétées', completed.toString(), Colors.green),
-          _buildSummaryStat('Actives', active.toString(), Colors.orange),
-          _buildSummaryStat('Annulées', canceled.toString(), Colors.red),
+          Icon(icon, color: color, size: 20),
+          SizedBox(height: responsive.spacingSmall),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          SizedBox(height: responsive.spacingSmall),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: responsive.fontSizeSmall,
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w600,
+            ),
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
   }
 
   Widget _buildSummaryStat(String label, String value, Color color) {
+    final responsive = context.responsive;
     return Column(
       children: [
         Text(
           value,
           style: TextStyle(
-            fontSize: 24,
+            fontSize: responsive.fontSizeTitle,
             fontWeight: FontWeight.bold,
             color: color,
           ),
         ),
-        const SizedBox(height: 4),
+        SizedBox(height: responsive.spacingSmall),
         Text(
           label,
           style: TextStyle(
-            fontSize: 10,
+            fontSize: responsive.fontSizeSmall,
             color: Colors.grey[600],
             fontWeight: FontWeight.w600,
           ),
@@ -500,119 +849,238 @@ class _ManagerHistoriqueScreenContentState
   }
 
   Widget _buildMissionCard(Mission mission) {
+    final responsive = context.responsive;
     final statusColor = _getStatusColor(mission.status);
     final statusText = _translateStatus(mission.status);
     final missionDate = DateTime.parse(mission.missionDate);
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey[200]!),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 4,
-            offset: const Offset(0, 2),
-          ),
-        ],
+    // Minimized card: only mission number, date, status, and locations
+    return InkWell(
+      onTap: () => _showMissionDetailsDialog(mission),
+      borderRadius: responsive.radiusLarge,
+      child: Container(
+        margin: EdgeInsets.only(bottom: responsive.spacingMedium),
+        padding: responsive.paddingMedium,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: responsive.radiusLarge,
+          border: Border.all(color: Colors.grey[200]!),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  mission.missionNumber,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: statusColor.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: statusColor.withOpacity(0.3)),
+                  ),
+                  child: Text(
+                    statusText,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: statusColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              DateFormat('dd/MM/yyyy HH:mm').format(missionDate),
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.location_on, size: 16, color: Colors.grey[500]),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${mission.fromLocation} → ${mission.toLocation}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[700],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header row with mission number and status
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    );
+  }
+
+  void _showMissionDetailsDialog(Mission mission) {
+    final responsive = context.responsive;
+    final statusColor = _getStatusColor(mission.status);
+    final statusText = _translateStatus(mission.status);
+    final missionDate = DateTime.parse(mission.missionDate);
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
+              Row(
+                children: [
+                  const Text('Mission '),
+                  Expanded(
+                    child: Text(
                       mission.missionNumber,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      DateFormat('dd/MM/yyyy HH:mm').format(missionDate),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: statusColor.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: statusColor.withOpacity(0.3)),
+                    ),
+                    child: Text(
+                      statusText,
                       style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey[600],
-                      ),
+                          fontSize: 11,
+                          color: statusColor,
+                          fontWeight: FontWeight.w700),
                     ),
-                  ],
-                ),
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: statusColor.withOpacity(0.3)),
-                ),
-                child: Text(
-                  statusText,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: statusColor,
-                    fontWeight: FontWeight.w700,
                   ),
-                ),
+                ],
               ),
             ],
           ),
-          const SizedBox(height: 12),
-
-          // Location row
-          Row(
-            children: [
-              Icon(Icons.location_on, size: 16, color: Colors.grey[500]),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '${mission.fromLocation} → ${mission.toLocation}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                    'Date:  ${DateFormat('dd/MM/yyyy HH:mm').format(missionDate)}'),
+                const SizedBox(height: 8),
+                Text('Ambulance: ${mission.ambulanceId}'),
+                Text('Conducteur: ${mission.driverName ?? 'N/A'}'),
+                Text(
+                    'Patient: ${(mission.patientFirstName ?? '') + ' ' + (mission.patientLastName ?? '')}'),
+                Text('Priorité: ${mission.priority ?? 'N/A'}'),
+                Text('De: ${mission.fromLocation}'),
+                Text('À: ${mission.toLocation}'),
+                if (mission.missionPrice != null)
+                  Text('Prix: ${mission.missionPrice} DT'),
+                if (mission.paymentType != null)
+                  Text(
+                      'Paiement: ${_getPaymentTypeLabel(mission.paymentType!)}'),
+                if (mission.status != null) Text('Statut: $statusText'),
+                // Add more fields as needed
+              ],
+            ),
+          ),
+          actions: [
+            if (mission.status.toLowerCase() != 'pending') ...[
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  // Show loading
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Génération du PDF...'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                  try {
+                    await PdfService.generateMissionReportPdf(mission);
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text('PDF généré avec succès!'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            'Erreur lors de la génération du PDF: \\${e.toString()}'),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Imprimer'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  // Show loading
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Génération de la facture...'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                  try {
+                    await PdfService.generateInvoicePdf(mission);
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Facture générée avec succès!'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(this.context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            'Erreur lors de la génération de la facture: \\${e.toString()}'),
+                        backgroundColor: Colors.red,
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
+                },
+                child: const Text('Facture'),
               ),
             ],
-          ),
-          const SizedBox(height: 12),
-
-          // Details grid
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            childAspectRatio: 4,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            children: [
-              _buildDetailItem(
-                  'Ambulance', mission.ambulanceId, Icons.local_shipping),
-              _buildDetailItem(
-                  'Conducteur', mission.driverName ?? 'N/A', Icons.person),
-              _buildDetailItem(
-                  'Patient',
-                  '${mission.patientFirstName ?? ''} ${mission.patientLastName ?? ''}'
-                      .trim(),
-                  Icons.person_outline),
-              _buildDetailItem(
-                  'Priorité', mission.priority ?? 'N/A', Icons.priority_high),
-            ],
-          ),
-        ],
-      ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Fermer'),
+            ),
+          ],
+        );
+      },
     );
   }
 

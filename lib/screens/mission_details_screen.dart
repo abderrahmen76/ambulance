@@ -3,6 +3,7 @@ import '../config/constants.dart';
 import '../models/mission_model.dart';
 import '../models/user_model.dart';
 import '../services/mission_service.dart';
+import '../utils/responsive.dart';
 
 class MissionDetailsScreen extends StatefulWidget {
   final Mission mission;
@@ -31,36 +32,70 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
 
   Future<void> _updateMissionStatus(String newStatus) async {
     setState(() => _isLoading = true);
-    try {
-      print('[MissionDetails] Updating mission ${_mission.id} to status: $newStatus');
-      await _missionService.updateMissionStatus(_mission.id, newStatus);
-      
-      setState(() {
-        _mission = Mission(
-          id: _mission.id,
-          missionNumber: _mission.missionNumber,
-          missionDate: _mission.missionDate,
-          fromLocation: _mission.fromLocation,
-          toLocation: _mission.toLocation,
-          patientPhone: _mission.patientPhone,
-          status: newStatus,
-          priority: _mission.priority,
-          ambulanceId: _mission.ambulanceId,
-        );
-      });
 
-      print('[MissionDetails] Mission status updated successfully');
+    try {
+      print(
+          '[MissionDetails] Updating mission ${_mission.id} to status: $newStatus');
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Mission status updated to $newStatus'),
-          backgroundColor: Colors.green,
+          content:
+              Text('⏳ Mise à jour en cours (${newStatus.toUpperCase()})...'),
+          duration: const Duration(seconds: 2),
         ),
       );
+
+      await _missionService.updateMissionStatus(_mission.id, newStatus);
+
+      // Add delay to ensure backend sync
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (mounted) {
+        setState(() {
+          _mission = Mission(
+            id: _mission.id,
+            missionNumber: _mission.missionNumber,
+            missionDate: _mission.missionDate,
+            fromLocation: _mission.fromLocation,
+            toLocation: _mission.toLocation,
+            patientPhone: _mission.patientPhone,
+            status: newStatus,
+            priority: _mission.priority,
+            ambulanceId: _mission.ambulanceId,
+          );
+        });
+
+        print('[MissionDetails] Mission status updated successfully');
+
+        // Get emoji for status
+        String emoji = '✅';
+        if (newStatus == 'cancelled') emoji = '❌';
+        if (newStatus == 'active') emoji = '🚀';
+        if (newStatus == 'arrived') emoji = '📍';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content:
+                Text('$emoji Mission ${newStatus.toUpperCase()} avec succès!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+
+        // For completed/cancelled missions, go back after a brief delay to allow new mission acceptance
+        if (newStatus == 'completed' || newStatus == 'cancelled') {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted) {
+              Navigator.pop(context);
+            }
+          });
+        }
+      }
     } catch (e) {
       print('[MissionDetails] ERROR: ${e.toString()}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Error: ${e.toString()}'),
+          content: Text('❌ Erreur: ${e.toString()}'),
           backgroundColor: Colors.red,
         ),
       );
@@ -114,7 +149,8 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
             padding: const EdgeInsets.all(16),
             child: Center(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: _getPriorityColor(),
                   borderRadius: BorderRadius.circular(20),
@@ -133,7 +169,7 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
         ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(context.responsive.paddingValueLarge),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -305,21 +341,26 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
                         children: [
                           Text(
                             'Mission Technical Sheet',
-                            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
                                   fontWeight: FontWeight.w600,
                                 ),
                           ),
                           Text(
                             'Vitals: Stable | Equipment: Gurney, O2',
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: Colors.grey[600],
-                                ),
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Colors.grey[600],
+                                    ),
                           ),
                         ],
                       ),
                     ],
                   ),
-                  Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey[600]),
+                  Icon(Icons.arrow_forward_ios,
+                      size: 16, color: Colors.grey[600]),
                 ],
               ),
             ),
@@ -331,7 +372,9 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   ElevatedButton.icon(
-                    onPressed: _isLoading ? null : () => _updateMissionStatus('active'),
+                    onPressed: _isLoading
+                        ? null
+                        : () => _updateMissionStatus('active'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -347,14 +390,17 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
                             width: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor:
+                                  AlwaysStoppedAnimation<Color>(Colors.white),
                             ),
                           )
                         : const Text('ACCEPT MISSION'),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: _isLoading ? null : () => _updateMissionStatus('cancelled'),
+                    onPressed: _isLoading
+                        ? null
+                        : () => _updateMissionStatus('cancelled'),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
@@ -386,7 +432,9 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
                   ),
                   const SizedBox(height: 12),
                   ElevatedButton(
-                    onPressed: _isLoading ? null : () => _updateMissionStatus('completed'),
+                    onPressed: _isLoading
+                        ? null
+                        : () => _updateMissionStatus('completed'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green[600],
                       foregroundColor: Colors.white,
@@ -399,7 +447,9 @@ class _MissionDetailsScreenState extends State<MissionDetailsScreen> {
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: _isLoading ? null : () => _updateMissionStatus('cancelled'),
+                    onPressed: _isLoading
+                        ? null
+                        : () => _updateMissionStatus('cancelled'),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(

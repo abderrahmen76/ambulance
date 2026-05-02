@@ -1,4 +1,6 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/responsive.dart';
 import '../config/constants.dart';
 import '../models/ambulance_model.dart';
 import '../models/fuel_card_model.dart';
@@ -9,9 +11,18 @@ import '../services/ambulance_service.dart';
 import '../services/fuel_card_service.dart';
 import '../services/maintenance_service.dart';
 import '../services/mission_service.dart';
+import '../services/auth_service.dart';
+import '../services/company_staff_service.dart';
+import '../services/notification_service.dart';
+import '../services/scheduled_shift_runtime_service.dart';
+import '../widgets/clinic_dropdown_field.dart';
 import 'add_fuel_card_screen.dart';
+import 'refuel_fuel_card_screen.dart';
 import 'add_maintenance_screen.dart';
 import 'active_missions_screen.dart';
+import 'equipment_rental_screen.dart';
+import 'notifications_list_screen.dart';
+import 'driver_tracking_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final User user;
@@ -31,15 +42,42 @@ class _DashboardScreenState extends State<DashboardScreen>
   final MissionService _missionService = MissionService();
   final FuelCardService _fuelCardService = FuelCardService();
   final MaintenanceService _maintenanceService = MaintenanceService();
+  final CompanyStaffService _companyStaffService = CompanyStaffService();
+  final ScheduledShiftRuntimeService _scheduledShiftRuntimeService =
+      ScheduledShiftRuntimeService();
+
+  static const _trackingBackendUrl =
+      'https://ambulance-backend-1-n6wd.onrender.com';
 
   late Future<Map<String, dynamic>> _dashboardData;
   int _selectedTabIndex = 0;
+  bool _isAmbulanceActionInProgress = false;
+  List<User> _companyStaff = [];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _dashboardData = _loadDashboardData();
+    _loadCompanyStaff();
+
+    // Set up notification tap handler
+    NotificationService.instance.onNotificationTapped =
+        (Map<String, dynamic> data) {
+      final String? type = data['type'];
+      debugPrint('[DashboardScreen] Notification tapped - type: $type');
+
+      // Navigate to missions tab when mission notification is tapped
+      if (type == 'mission_created' ||
+          type == 'mission_assigned' ||
+          type == 'MISSION_BROADCAST') {
+        if (mounted) {
+          setState(() {
+            _selectedTabIndex = 1; // Switch to Missions tab
+          });
+        }
+      }
+    };
   }
 
   @override
@@ -62,19 +100,33 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<Map<String, dynamic>> _loadDashboardData() async {
     try {
+      // Clear ambulance cache to fetch fresh data
+      _ambulanceService.clearCache();
+
       // Fetch ambulance
-      final ambulance =
-          await _ambulanceService.getAmbulanceForDriver(widget.user.id!);
+      final ambulance = await _ambulanceService.getAmbulanceForDriver(
+        widget.user.id!,
+        tenantId: widget.user.tenantId,
+      );
 
       // Fetch missions if we have an ambulance
       List<Mission> availableMissions = [];
       List<Mission> activeMissions = [];
       List<FuelCard> fuelHistory = [];
       List<MaintenanceRecord> maintenanceRecords = [];
+      List<Ambulance> availableAmbulances = [];
 
       if (ambulance != null) {
+        try {
+          await _scheduledShiftRuntimeService.syncForDriver(
+            user: widget.user,
+            ambulance: ambulance,
+            backendUrl: _trackingBackendUrl,
+          );
+        } catch (_) {}
+
         final ambulanceId = ambulance.id!;
-        final missions = await _missionService.getAvailableMissions();
+        final missions = await _missionService.getAvailableMissions(ambulanceId);
         availableMissions = missions;
 
         // Fetch active missions
@@ -88,15 +140,149 @@ class _DashboardScreenState extends State<DashboardScreen>
             await _maintenanceService.getMaintenanceRecords(ambulanceId);
       }
 
+      if (widget.user.tenantId != null && widget.user.tenantId!.isNotEmpty) {
+        availableAmbulances =
+            await _ambulanceService.getAvailableAmbulancesForDriver(
+          driverId: widget.user.id,
+          tenantId: widget.user.tenantId!,
+        );
+      }
+
       return {
         'ambulance': ambulance,
         'missions': availableMissions,
         'activeMissions': activeMissions,
         'fuelHistory': fuelHistory,
         'maintenanceRecords': maintenanceRecords,
+        'availableAmbulances': availableAmbulances,
       };
     } catch (e) {
       rethrow;
+    }
+  }
+
+  Future<void> _loadCompanyStaff() async {
+    final tenantId = widget.user.tenantId;
+    if (tenantId == null || tenantId.isEmpty) {
+      return;
+    }
+
+    try {
+      final staff = await _companyStaffService.getCompanyStaff(tenantId);
+      if (!mounted) return;
+      setState(() {
+        _companyStaff =
+            staff.where((member) => member.id != widget.user.id).toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading company staff for dashboard: $e');
+    }
+  }
+
+  Future<void> _refreshDashboardData() async {
+    if (!mounted) return;
+    setState(() {
+      _dashboardData = _loadDashboardData();
+    });
+  }
+
+  Future<void> _linkAmbulance(Ambulance ambulance) async {
+    if (widget.user.tenantId == null || widget.user.tenantId!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Aucun tenant associé à ce conducteur.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isAmbulanceActionInProgress = true);
+    try {
+      await _ambulanceService.assignAmbulanceToDriver(
+        ambulanceId: ambulance.id,
+        driverId: widget.user.id,
+        tenantId: widget.user.tenantId!,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ambulance ${ambulance.ambulanceNumber} liée avec succès.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _refreshDashboardData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isAmbulanceActionInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _releaseAmbulance(Ambulance ambulance) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Libérer l’ambulance'),
+            content: Text(
+              'Voulez-vous vraiment libérer ${ambulance.ambulanceNumber} pour pouvoir choisir une autre ambulance ?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Annuler'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Libérer'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) {
+      return;
+    }
+
+    setState(() => _isAmbulanceActionInProgress = true);
+    try {
+      await _ambulanceService.releaseAmbulanceFromDriver(
+        ambulanceId: ambulance.id,
+        driverId: widget.user.id,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ambulance ${ambulance.ambulanceNumber} libérée avec succès.',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _refreshDashboardData();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isAmbulanceActionInProgress = false);
+      }
     }
   }
 
@@ -142,7 +328,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         });
                       }
                     },
-                    child: const Text('Réessayer'),
+                    child: const Text('RÃ©essayer'),
                   ),
                 ],
               ),
@@ -152,69 +338,106 @@ class _DashboardScreenState extends State<DashboardScreen>
           final data = snapshot.data!;
           final ambulance = data['ambulance'] as Ambulance?;
           final missions = (data['missions'] ?? []) as List<Mission>;
-          final activeMissions = (data['activeMissions'] ?? []) as List<Mission>;
+          final activeMissions =
+              (data['activeMissions'] ?? []) as List<Mission>;
           final fuelHistory = (data['fuelHistory'] ?? []) as List<FuelCard>;
           final maintenanceRecords =
               (data['maintenanceRecords'] ?? []) as List<MaintenanceRecord>;
+          final availableAmbulances =
+              (data['availableAmbulances'] ?? []) as List<Ambulance>;
 
           // Show different screen based on selected tab
           Widget tabContent;
           switch (_selectedTabIndex) {
             case 0:
               // Dashboard tab
-              tabContent = SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Ambulance Header
-                    if (ambulance != null) ...[
-                      _buildAmbulanceHeader(context, ambulance),
-                      const SizedBox(height: 24),
-                    ],
+              tabContent = ambulance == null
+                  ? _buildAmbulanceSelectionState(
+                      context,
+                      availableAmbulances,
+                    )
+                  : SingleChildScrollView(
+                      padding:
+                          EdgeInsets.all(context.responsive.paddingValueLarge),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildAmbulanceHeader(
+                            context,
+                            ambulance,
+                            onRelease: _isAmbulanceActionInProgress
+                                ? null
+                                : () => _releaseAmbulance(ambulance),
+                          ),
+                          const SizedBox(height: 24),
 
-                    // Available Missions Section
-                    _buildMissionsSection(context, missions, activeMissions.isNotEmpty),
-                    const SizedBox(height: 24),
+                          // Available Missions Section
+                          _buildMissionsSection(
+                              context, missions, activeMissions.isNotEmpty),
+                          const SizedBox(height: 24),
 
-                    // Quick Info Cards
-                    if (ambulance != null) ...[
-                      _buildQuickInfoCards(context, ambulance),
-                      const SizedBox(height: 24),
-                    ],
+                          // Quick Info Cards
+                          _buildQuickInfoCards(context, ambulance),
+                          const SizedBox(height: 24),
 
-                    // Current Position Map (Placeholder)
-                    _buildMapSection(context),
-                    const SizedBox(height: 24),
+                          // Fuel Card History
+                          if (fuelHistory.isNotEmpty) ...[
+                            _buildFuelHistorySection(
+                                context, fuelHistory, ambulance.id!),
+                            const SizedBox(height: 24),
+                          ] else ...[
+                            _buildEmptyFuelCardSection(context, ambulance.id!),
+                            const SizedBox(height: 24),
+                          ],
 
-                    // Fuel Card History
-                    if (fuelHistory.isNotEmpty && ambulance != null) ...[
-                      _buildFuelHistorySection(context, fuelHistory, ambulance.id!),
-                      const SizedBox(height: 24),
-                    ] else if (ambulance != null) ...[
-                      _buildEmptyFuelCardSection(context, ambulance.id!),
-                      const SizedBox(height: 24),
-                    ],
-
-                    // Maintenance Records
-                    if (maintenanceRecords.isNotEmpty && ambulance != null) ...[
-                      _buildMaintenanceSection(context, maintenanceRecords, ambulance.id!),
-                      const SizedBox(height: 24),
-                    ],
-                  ],
-                ),
-              );
+                          // Maintenance Records
+                          _buildMaintenanceSection(
+                              context, maintenanceRecords, ambulance),
+                          const SizedBox(height: 24),
+                        ],
+                      ),
+                    );
               break;
             case 1:
               // Missions tab
               if (ambulance == null) {
-                tabContent = const Center(
-                  child: Text('Aucune ambulance assignée'),
+                tabContent = _buildAmbulanceSelectionState(
+                  context,
+                  availableAmbulances,
                 );
               } else {
                 tabContent = ActiveMissionsScreen(
                   user: widget.user,
                   ambulanceId: ambulance.id!,
+                );
+              }
+              break;
+            case 2:
+              // Equipment Rental tab
+              if (ambulance == null) {
+                tabContent = _buildAmbulanceSelectionState(
+                  context,
+                  availableAmbulances,
+                );
+              } else {
+                tabContent = EquipmentRentalScreen(
+                  ambulance: ambulance,
+                  user: widget.user,
+                );
+              }
+              break;
+            case 3:
+              // Driver Tracking tab
+              if (ambulance == null) {
+                tabContent = _buildAmbulanceSelectionState(
+                  context,
+                  availableAmbulances,
+                );
+              } else {
+                tabContent = DriverTrackingScreen(
+                  user: widget.user,
+                  ambulanceId: ambulance.id!,
+                  ambulanceNumber: ambulance.ambulanceNumber ?? 'N/A',
                 );
               }
               break;
@@ -281,16 +504,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                         final ambulanceNumber =
                             (snapshot.data?['ambulance'] as Ambulance?)
                                     ?.ambulanceNumber ??
-                                'AMB-001';
+                                'Choisir';
                         return Text(
                           ambulanceNumber,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleLarge
-                              ?.copyWith(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
                         );
                       },
                     ),
@@ -309,9 +530,11 @@ class _DashboardScreenState extends State<DashboardScreen>
                           size: 24,
                         ),
                         onPressed: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Aucune nouvelle notification'),
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) =>
+                                  const NotificationsListScreen(),
                             ),
                           );
                         },
@@ -335,7 +558,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   IconButton(
                     icon: const Icon(Icons.logout),
                     color: AppColors.primary,
-                    tooltip: 'Déconnexion',
+                    tooltip: 'DÃ©connexion',
                     onPressed: _logout,
                   ),
                 ],
@@ -347,7 +570,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _buildAmbulanceHeader(BuildContext context, Ambulance ambulance) {
+  Widget _buildAmbulanceHeader(
+    BuildContext context,
+    Ambulance ambulance, {
+    VoidCallback? onRelease,
+  }) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -413,12 +640,176 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
               ],
             ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerRight,
+            child: OutlinedButton.icon(
+              onPressed: _isAmbulanceActionInProgress ? null : onRelease,
+              icon: _isAmbulanceActionInProgress
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.link_off),
+              label: const Text('Libérer cette ambulance'),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildMissionsSection(BuildContext context, List<Mission> missions, bool hasActiveMission) {
+  Widget _buildAmbulanceSelectionState(
+    BuildContext context,
+    List<Ambulance> availableAmbulances,
+  ) {
+    return SingleChildScrollView(
+      padding: EdgeInsets.all(context.responsive.paddingValueLarge),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.local_shipping_outlined,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Choisissez une ambulance pour continuer',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Votre compte conducteur n’est pas encore lié à une ambulance. Sélectionnez une ambulance disponible ci-dessous.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.grey[700],
+                      ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          if (availableAmbulances.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey[200]!),
+              ),
+              child: Text(
+                'Aucune ambulance disponible pour le moment. Demandez à votre manager de libérer ou d’assigner une ambulance.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            )
+          else
+            ...availableAmbulances.map(
+              (availableAmbulance) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.grey[200]!),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.local_hospital,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              availableAmbulance.ambulanceNumber,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .titleMedium
+                                  ?.copyWith(fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              availableAmbulance.telephone?.isNotEmpty == true
+                                  ? availableAmbulance.telephone!
+                                  : 'Téléphone non renseigné',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(color: Colors.grey[600]),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      ElevatedButton(
+                        onPressed: _isAmbulanceActionInProgress
+                            ? null
+                            : () => _linkAmbulance(availableAmbulance),
+                        child: _isAmbulanceActionInProgress
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white,
+                                  ),
+                                ),
+                              )
+                            : const Text('Choisir'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMissionsSection(
+      BuildContext context, List<Mission> missions, bool hasActiveMission) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -429,7 +820,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               'Missions Disponibles',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.bold,
-              ),
+                  ),
             ),
             IconButton(
               onPressed: () => _showAddMissionDialog(context),
@@ -461,76 +852,267 @@ class _DashboardScreenState extends State<DashboardScreen>
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: List.generate(missions.length, (index) {
-                final reversedMissions = missions.reversed.toList();
-                final mission = reversedMissions[index];
-                final priorityLower = (mission.priority ?? '').toLowerCase();
-                final isHighPriority =
-                    priorityLower == 'urgent' || priorityLower == 'emergency';
+                children: List.generate(missions.length, (index) {
+                  final reversedMissions = missions.reversed.toList();
+                  final mission = reversedMissions[index];
+                  final priorityLower = (mission.priority ?? '').toLowerCase();
+                  final isHighPriority =
+                      priorityLower == 'urgent' || priorityLower == 'emergency';
+                  final clinicName = mission.clinicName?.trim();
+                  final clinicLabel = (clinicName != null && clinicName.isNotEmpty)
+                      ? clinicName
+                      : 'Mission clinique';
+                  final isClinicMission = mission.clinicTenantId != null &&
+                      mission.clinicTenantId!.isNotEmpty;
+                  final isGuestPatientMission = mission.isGuestPatientMission;
+                  final preferredAmbulanceNumber =
+                      mission.requestedAmbulanceNumber;
+                  final accentColor = isClinicMission
+                      ? const Color(0xFF7C3AED)
+                      : (isGuestPatientMission
+                          ? const Color(0xFF0F766E)
+                          : AppColors.primary);
 
                 return Padding(
                   padding: EdgeInsets.only(
                     right: index == missions.length - 1 ? 0 : 12,
                   ),
-                  child: Container(
-                    width: 320,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color:
-                            isHighPriority ? Colors.orange : Colors.grey[200]!,
-                        width: isHighPriority ? 2 : 1,
+                    child: Container(
+                      width: 320,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isClinicMission
+                            ? const Color(0xFFF8F5FF)
+                            : Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isClinicMission
+                              ? const Color(0xFFD8B4FE)
+                              : (isGuestPatientMission
+                                  ? const Color(0xFF2DD4BF)
+                                  : (isHighPriority
+                                  ? Colors.orange
+                                  : Colors.grey[200]!)),
+                          width: isClinicMission || isHighPriority || isGuestPatientMission
+                              ? 2
+                              : 1,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: (isClinicMission
+                                    ? accentColor
+                                    : Colors.black)
+                                .withOpacity(isClinicMission ? 0.12 : 0.05),
+                            blurRadius: isClinicMission ? 10 : 4,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.05),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isHighPriority
-                                ? Colors.orange[100]
-                                : Colors.blue[100],
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            isHighPriority
-                                ? 'PRIORITE HAUTE'
-                                : 'PRIORITE MOYENNE',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w600,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isClinicMission) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF7C3AED),
+                                    Color(0xFF2563EB),
+                                  ],
                                 ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Mission #${mission.missionNumber}',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[600],
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.local_hospital,
+                                    color: Colors.white,
+                                    size: 18,
                                   ),
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Icon(Icons.location_on,
-                                size: 16, color: AppColors.primary),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'MISSION CLINIQUE',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          clinicLabel,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          if (isGuestPatientMission) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFF0F766E),
+                                    Color(0xFF14B8A6),
+                                  ],
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    Icons.person_pin_circle_rounded,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'MISSION PATIENT',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                            letterSpacing: 0.8,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          mission.requestedCompanyName ??
+                                              'Najda / Patient App',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+                          if (!isClinicMission) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isGuestPatientMission
+                                    ? const Color(0xFFCCFBF1)
+                                    : (isHighPriority
+                                        ? Colors.orange[100]
+                                        : Colors.blue[100]),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                isGuestPatientMission
+                                    ? 'DEMANDE PATIENT'
+                                    : (isHighPriority
+                                        ? 'PRIORITE HAUTE'
+                                        : 'PRIORITE MOYENNE'),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .labelSmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: isGuestPatientMission
+                                          ? const Color(0xFF0F766E)
+                                          : null,
+                                    ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                            Text(
+                              'Mission #${mission.missionNumber}',
+                              style:
+                                  Theme.of(context).textTheme.bodySmall?.copyWith(
+                                        color: isClinicMission
+                                            ? accentColor
+                                            : Colors.grey[600],
+                                      ),
+                            ),
+                            if (isGuestPatientMission &&
+                                preferredAmbulanceNumber != null) ...[
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 8,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF0FDFA),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: const Color(0xFF99F6E4),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.local_shipping_outlined,
+                                      size: 16,
+                                      color: Color(0xFF0F766E),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        'Preferee pour $preferredAmbulanceNumber',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: const Color(0xFF0F766E),
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Icon(Icons.location_on,
+                                  size: 16, color: accentColor),
                             const SizedBox(width: 8),
                             Expanded(
                               child: Column(
@@ -546,7 +1128,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                                         ),
                                   ),
                                   Text(
-                                    mission.fromLocation ?? 'Aucune localisation',
+                                    mission.pickupDisplayLabel,
                                     style: Theme.of(context)
                                         .textTheme
                                         .bodySmall
@@ -600,16 +1182,21 @@ class _DashboardScreenState extends State<DashboardScreen>
                         SizedBox(
                           width: double.infinity,
                           child: ElevatedButton(
-                            onPressed: hasActiveMission ? null : () {
-                              _showDriverNameDialog(context, mission);
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: hasActiveMission ? Colors.grey[400] : AppColors.primary,
-                              foregroundColor: Colors.white,
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 10),
-                            ),
-                            child: Text(hasActiveMission ? 'Mission en cours' : 'Accepter'),
+                            onPressed: hasActiveMission
+                                ? null
+                                : () {
+                                    _showDriverNameDialog(context, mission);
+                                  },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: hasActiveMission
+                                    ? Colors.grey[400]
+                                    : accentColor,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(vertical: 10),
+                              ),
+                            child: Text(hasActiveMission
+                                ? 'Mission en cours'
+                                : 'Accepter'),
                           ),
                         ),
                       ],
@@ -647,37 +1234,44 @@ class _DashboardScreenState extends State<DashboardScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 32,
-                    height: 32,
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withOpacity(0.1),
-                      shape: BoxShape.circle,
+              Expanded(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.info,
+                        color: AppColors.primary,
+                        size: 18,
+                      ),
                     ),
-                    child: const Icon(
-                      Icons.info,
-                      color: AppColors.primary,
-                      size: 18,
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Informations Rapides sur l\'Ambulance',
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Informations Rapides sur l\'Ambulance',
-                    style:
-                        Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               IconButton(
                 icon: const Icon(Icons.build),
                 color: Colors.orange,
                 onPressed: () {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Informations de maintenance ouvertes')),
+                    const SnackBar(
+                        content: Text('Informations de maintenance ouvertes')),
                   );
                 },
               ),
@@ -733,27 +1327,6 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ],
           ),
-          const SizedBox(height: 16),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'PROCHAIN SERVICE',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Colors.grey[600],
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'In ${nextServiceKm - (ambulance.kilometrage ?? 0)} km',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: Colors.orange[700],
-                      fontWeight: FontWeight.bold,
-                    ),
-              ),
-            ],
-          ),
         ],
       ),
     );
@@ -776,17 +1349,18 @@ class _DashboardScreenState extends State<DashboardScreen>
               onPressed: () {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('Carte complète à venir'),
+                    content: Text('Carte complÃ¨te Ã  venir'),
                     duration: Duration(milliseconds: 500),
                   ),
                 );
               },
               icon: const Icon(Icons.fullscreen, size: 18),
-              label: const Text('Carte Complète'),
+              label: const Text('Carte ComplÃ¨te'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               ),
             ),
           ],
@@ -820,7 +1394,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Alger, Algérie',
+                  'Alger, AlgÃ©rie',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Colors.grey[700],
                       ),
@@ -854,31 +1428,65 @@ class _DashboardScreenState extends State<DashboardScreen>
                     fontWeight: FontWeight.bold,
                   ),
             ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => AddFuelCardScreen(
-                      user: widget.user,
-                      ambulanceId: ambulanceId,
-                    ),
-                  ),
-                ).then((_) {
-                  if (mounted) {
-                    setState(() {
-                      _dashboardData = _loadDashboardData();
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AddFuelCardScreen(
+                          user: widget.user,
+                          ambulanceId: ambulanceId,
+                        ),
+                      ),
+                    ).then((_) {
+                      if (mounted) {
+                        setState(() {
+                          _dashboardData = _loadDashboardData();
+                        });
+                      }
                     });
-                  }
-                });
-              },
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => RefuelFuelCardScreen(
+                          user: widget.user,
+                          ambulanceId: ambulanceId,
+                        ),
+                      ),
+                    ).then((_) {
+                      if (mounted) {
+                        setState(() {
+                          _dashboardData = _loadDashboardData();
+                        });
+                      }
+                    });
+                  },
+                  icon: const Icon(Icons.local_gas_station, size: 18),
+                  label: const Text('Recharger'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[600],
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -892,10 +1500,11 @@ class _DashboardScreenState extends State<DashboardScreen>
           child: Center(
             child: Column(
               children: [
-                Icon(Icons.local_gas_station, size: 48, color: Colors.grey[400]),
+                Icon(Icons.local_gas_station,
+                    size: 48, color: Colors.grey[400]),
                 const SizedBox(height: 12),
                 Text(
-                  'Aucune transaction enregistrée',
+                  'Aucune transaction enregistrÃ©e',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                         color: Colors.grey[600],
                       ),
@@ -925,32 +1534,67 @@ class _DashboardScreenState extends State<DashboardScreen>
                     fontWeight: FontWeight.bold,
                   ),
             ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => AddFuelCardScreen(
-                      user: widget.user,
-                      ambulanceId: ambulanceId,
-                    ),
-                  ),
-                ).then((_) {
-                  // Refresh dashboard data when returning from form
-                  if (mounted) {
-                    setState(() {
-                      _dashboardData = _loadDashboardData();
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => AddFuelCardScreen(
+                          user: widget.user,
+                          ambulanceId: ambulanceId,
+                        ),
+                      ),
+                    ).then((_) {
+                      // Refresh dashboard data when returning from form
+                      if (mounted) {
+                        setState(() {
+                          _dashboardData = _loadDashboardData();
+                        });
+                      }
                     });
-                  }
-                });
-              },
-              icon: const Icon(Icons.add, size: 18),
-              label: const Text('Add'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
+                  },
+                  icon: const Icon(Icons.add, size: 18),
+                  label: const Text('Add'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => RefuelFuelCardScreen(
+                          user: widget.user,
+                          ambulanceId: ambulanceId,
+                        ),
+                      ),
+                    ).then((_) {
+                      // Refresh dashboard data when returning from form
+                      if (mounted) {
+                        setState(() {
+                          _dashboardData = _loadDashboardData();
+                        });
+                      }
+                    });
+                  },
+                  icon: const Icon(Icons.local_gas_station, size: 18),
+                  label: const Text('Recharger'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[600],
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -997,7 +1641,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Montant',
+                        'Ambulancier',
                         style:
                             Theme.of(context).textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
@@ -1008,7 +1652,29 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Solde',
+                        'Soldes PayÃ©',
+                        style:
+                            Theme.of(context).textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primary,
+                                ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'Soldes Restant',
+                        style:
+                            Theme.of(context).textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primary,
+                                ),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'Kilometrage',
                         style:
                             Theme.of(context).textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
@@ -1023,12 +1689,31 @@ class _DashboardScreenState extends State<DashboardScreen>
               ListView.separated(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                itemCount: fuelCards.take(5).length,
+                itemCount: fuelCards
+                    .where((card) => card.driverName.toLowerCase() != 'refill')
+                    .take(5)
+                    .length,
                 separatorBuilder: (_, __) =>
                     Divider(color: Colors.grey[150], height: 1),
                 itemBuilder: (context, index) {
-                  final card = fuelCards[index];
+                  final filteredCards = fuelCards
+                      .where(
+                          (card) => card.driverName.toLowerCase() != 'refill')
+                      .toList();
+                  final card = filteredCards[index];
                   final isEven = index.isEven;
+
+                  // Calculate solde restant by summing all refills and subtracting consumptions up to this point
+                  double calculatedBalance = 0.0;
+                  for (final entry in fuelCards) {
+                    if (entry.driverName.toLowerCase() == 'refill') {
+                      calculatedBalance += entry.soldesPaid;
+                    } else {
+                      calculatedBalance -= entry.soldesPaid;
+                    }
+                    if (entry.id == card.id) break; // Stop at current card
+                  }
+
                   return Container(
                     color: isEven ? Colors.grey[50] : Colors.white,
                     padding: const EdgeInsets.symmetric(
@@ -1053,7 +1738,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         ),
                         Expanded(
                           child: Text(
-                            '${card.fuelAmount} L',
+                            card.driverName,
                             style:
                                 Theme.of(context).textTheme.bodySmall?.copyWith(
                                       fontWeight: FontWeight.w600,
@@ -1064,7 +1749,37 @@ class _DashboardScreenState extends State<DashboardScreen>
                         ),
                         Expanded(
                           child: Text(
-                            '${card.balance} L',
+                            '${card.soldesPaid} TND',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            '${calculatedBalance.toStringAsFixed(2)} TND',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                      color: calculatedBalance >= 0
+                                          ? Colors.green[700]
+                                          : Colors.red[700],
+                                    ),
+                            textAlign: TextAlign.right,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            card.kilometrage != null
+                                ? '${card.kilometrage!.toStringAsFixed(1)} km'
+                                : '-',
                             style:
                                 Theme.of(context).textTheme.bodySmall?.copyWith(
                                       fontWeight: FontWeight.w500,
@@ -1090,7 +1805,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _buildMaintenanceSection(
     BuildContext context,
     List<MaintenanceRecord> records,
-    String ambulanceId,
+    Ambulance ambulance,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1098,12 +1813,17 @@ class _DashboardScreenState extends State<DashboardScreen>
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              'Enregistrements de Maintenance',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+            Expanded(
+              child: Text(
+                'Enregistrements de Maintenance',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
+            const SizedBox(width: 8),
             ElevatedButton.icon(
               onPressed: () {
                 Navigator.push(
@@ -1111,7 +1831,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   MaterialPageRoute(
                     builder: (context) => AddMaintenanceScreen(
                       user: widget.user,
-                      ambulanceId: ambulanceId,
+                      ambulanceId: ambulance.id!,
                     ),
                   ),
                 ).then((_) {
@@ -1128,7 +1848,8 @@ class _DashboardScreenState extends State<DashboardScreen>
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               ),
             ),
           ],
@@ -1176,7 +1897,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Mécanicien',
+                        'Driver',
                         style:
                             Theme.of(context).textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
@@ -1187,7 +1908,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Date',
+                        'MÃ©canicien',
                         style:
                             Theme.of(context).textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
@@ -1198,7 +1919,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Coût',
+                        'CoÃ»t',
                         style:
                             Theme.of(context).textTheme.labelMedium?.copyWith(
                                   fontWeight: FontWeight.w700,
@@ -1210,90 +1931,125 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ],
                 ),
               ),
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: records.take(5).length,
-                separatorBuilder: (_, __) =>
-                    Divider(color: Colors.grey[150], height: 1),
-                itemBuilder: (context, index) {
-                  final record = records[index];
-                  final isEven = index.isEven;
-                  final maintenanceType = record.maintenanceType ?? 'Service';
-                  final mechanicName = record.mechanicName ?? 'Unknown';
-                  final date = (record.date ?? '').split('T')[0].isEmpty
-                      ? 'N/A'
-                      : (record.date ?? '').split('T')[0];
-                  final cost = record.pricePerPiece ?? 0;
+              Builder(
+                builder: (context) {
+                  // Sort records by date in descending order (newest first)
+                  final sortedRecords = List<MaintenanceRecord>.from(records)
+                    ..sort((a, b) => b.date.compareTo(a.date));
 
-                  return Container(
-                    color: isEven ? Colors.grey[50] : Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: Text(
-                            maintenanceType,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
+                  return SizedBox(
+                    height: 300,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.vertical,
+                      child: Column(
+                        children: sortedRecords.map((record) {
+                          final maintenanceType =
+                              record.maintenanceType ?? 'Service';
+                          final driverName = record.driverName ?? '-';
+                          final mechanicName = record.mechanicName ?? 'Unknown';
+                          final cost = record.pricePerPiece ?? 0;
+                          final statusColor =
+                              _getMaintenanceStatusColor(maintenanceType);
+
+                          return GestureDetector(
+                            onTap: () => _showMaintenanceDetailsDialog(
+                                record, ambulance),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 14,
+                              ),
+                              decoration: BoxDecoration(
+                                border: Border(
+                                  bottom: BorderSide(
+                                    color: Colors.grey[200]!,
+                                    width: 0.5,
+                                  ),
                                 ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            mechanicName,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            date,
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[600],
-                                ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            '$cost DA',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                            textAlign: TextAlign.right,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
+                                color: Colors.grey[50],
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(
+                                    flex: 2,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: statusColor.withOpacity(0.15),
+                                        borderRadius: BorderRadius.circular(4),
+                                      ),
+                                      child: Text(
+                                        maintenanceType,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w600,
+                                              color: statusColor,
+                                            ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      driverName,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.grey[700],
+                                          ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      mechanicName,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.grey[700],
+                                          ),
+                                      textAlign: TextAlign.center,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      cost > 0 ? '$cost TND' : '-',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w600,
+                                            color: cost > 0
+                                                ? Colors.green[700]
+                                                : Colors.grey[700],
+                                          ),
+                                      textAlign: TextAlign.right,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
                     ),
                   );
                 },
@@ -1307,138 +2063,216 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   /// Show driver name input dialog
   void _showDriverNameDialog(BuildContext context, Mission mission) {
-    final TextEditingController driverNameController = TextEditingController();
-    
+    final TextEditingController driverNameController =
+        TextEditingController(text: widget.user.name);
+    bool isAccepting = false;
+    final selectedTeammateIds = <String>{};
+
+    void updateDriverNames() {
+      final teammateNames = _companyStaff
+          .where((member) => selectedTeammateIds.contains(member.id))
+          .map((member) => member.name)
+          .toList();
+      driverNameController.text =
+          <String>[widget.user.name, ...teammateNames].join(', ');
+    }
+
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Accepter la Mission'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Mission #${mission.missionNumber}',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Accepter la Mission'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Mission #${mission.missionNumber}',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                     ),
-              ),
-              const SizedBox(height: 20),
-              const Text('Veuillez entrer votre nom:'),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: driverNameController,
-                decoration: InputDecoration(
-                  hintText: 'Votre nom complet',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 12,
-                  ),
+                    const SizedBox(height: 20),
+                    const Text('Chauffeur responsable'),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: driverNameController,
+                      readOnly: true,
+                      decoration: InputDecoration(
+                        labelText: 'Nom du chauffeur',
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                    ),
+                      validator: (value) {
+                        if (value?.isEmpty ?? true) {
+                          return 'Veuillez entrer votre nom';
+                        }
+                        return null;
+                      },
+                    ),
+                    if (_companyStaff.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        'Ajouter d\'autres utilisateurs de la société',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _companyStaff
+                            .map(
+                              (member) => FilterChip(
+                                label: Text(member.name),
+                                selected:
+                                    selectedTeammateIds.contains(member.id),
+                                onSelected: isAccepting
+                                    ? null
+                                    : (selected) {
+                                        setDialogState(() {
+                                          if (selected) {
+                                            selectedTeammateIds.add(member.id);
+                                          } else {
+                                            selectedTeammateIds.remove(member.id);
+                                          }
+                                          updateDriverNames();
+                                        });
+                                      },
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ],
+                  ],
                 ),
-                validator: (value) {
-                  if (value?.isEmpty ?? true) {
-                    return 'Veuillez entrer votre nom';
-                  }
-                  return null;
-                },
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(dialogContext);
-              },
-              child: const Text('Annuler'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (driverNameController.text.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Veuillez entrer votre nom'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                  return;
-                }
+              actions: [
+                TextButton(
+                  onPressed:
+                      isAccepting ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Annuler'),
+                ),
+                ElevatedButton(
+                  onPressed: isAccepting
+                      ? null
+                      : () async {
+                          if (driverNameController.text.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Veuillez entrer votre nom'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                            return;
+                          }
 
-                try {
-                  // Close dialog
-                  Navigator.pop(dialogContext);
+                          setDialogState(() => isAccepting = true);
 
-                  // Show loading
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Acceptation de la mission...'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
+                          // First close the dialog IMMEDIATELY
+                          Navigator.pop(dialogContext);
 
-                  // Get ambulance ID from loaded data
-                  final data = await _loadDashboardData();
-                  final ambulance = data['ambulance'] as Ambulance?;
+                          // After dialog is closed, do all async work WITHOUT using context
+                          try {
+                            print('ðŸ”µ [Dashboard] Mission acceptance started');
+                            print('ðŸ”µ [Dashboard] Mission ID: ${mission.id}');
+                            print(
+                                'ðŸ”µ [Dashboard] Mission Number: ${mission.missionNumber}');
 
-                  if (ambulance == null) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Aucune ambulance assignée'),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                    return;
-                  }
+                            // Get ambulance ID from loaded data
+                            final data = await _loadDashboardData();
+                            final ambulance = data['ambulance'] as Ambulance?;
 
-                  // Accept mission
-                  await _missionService.acceptMission(
-                    mission.id!,
-                    ambulance.id!,
-                    driverNameController.text,
-                  );
+                            print(
+                                'ðŸ”µ [Dashboard] Ambulance loaded: ${ambulance?.id}');
 
-                  print('[Dashboard] Mission accepted successfully');
+                            if (ambulance == null) {
+                              print('ðŸ”´ [Dashboard] ERROR: No ambulance found');
+                              return;
+                            }
 
-                  if (mounted) {
-                    // Reload dashboard data
-                    setState(() {
-                      _dashboardData = _loadDashboardData();
-                      _selectedTabIndex = 1; // Switch to Missions tab
-                    });
+                            print('ðŸ”µ [Dashboard] Calling acceptMission with:');
+                            print('   - Mission ID: ${mission.id}');
+                            print('   - Ambulance ID: ${ambulance.id}');
+                            print(
+                                '   - Driver Name: ${driverNameController.text}');
 
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Mission #${mission.missionNumber} acceptée! Bienvenue ${driverNameController.text}',
-                        ),
-                        backgroundColor: Colors.green,
-                        duration: const Duration(seconds: 3),
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  print('[Dashboard] ERROR accepting mission: ${e.toString()}');
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error: ${e.toString()}'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-              ),
-              child: const Text('Accepter'),
-            ),
-          ],
+                            // Accept mission
+                            await _missionService.acceptMission(
+                              mission.id!,
+                              ambulance.id!,
+                              driverNameController.text,
+                            );
+
+                            print('[Dashboard] Mission accepted successfully');
+
+                            // Add delay to ensure backend sync before reload
+                            await Future.delayed(
+                                const Duration(milliseconds: 500));
+
+                            if (mounted) {
+                              // Reload dashboard data immediately
+                              setState(() {
+                                _dashboardData = _loadDashboardData();
+                                _selectedTabIndex = 1; // Switch to Missions tab
+                              });
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'âœ… Mission #${mission.missionNumber} acceptÃ©e! Bienvenue ${driverNameController.text}',
+                                  ),
+                                  backgroundColor: Colors.green,
+                                  duration: const Duration(seconds: 3),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            print(
+                                '[Dashboard] ERROR accepting mission: ${e.toString()}');
+                            print('[Dashboard] Stack trace: $e');
+
+                            // Show error only if widget is still mounted and context is valid
+                            if (mounted) {
+                              try {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('âŒ Erreur: ${e.toString()}'),
+                                    backgroundColor: Colors.red,
+                                  ),
+                                );
+                              } catch (contextError) {
+                                print(
+                                    '[Dashboard] Could not show error message: $contextError');
+                                // Context is no longer valid, just log the error
+                              }
+                            }
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        isAccepting ? Colors.grey : AppColors.primary,
+                  ),
+                  child: isAccepting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Text('Accepter'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -1466,35 +2300,198 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _buildBottomNavigation(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 600;
+
     return Container(
       decoration: BoxDecoration(
         border: Border(
           top: BorderSide(color: Colors.grey[200]!),
         ),
       ),
-      child: BottomNavigationBar(
-        backgroundColor: Colors.white,
-        selectedItemColor: AppColors.primary,
-        unselectedItemColor: Colors.grey,
-        currentIndex: _selectedTabIndex > 1 ? 1 : _selectedTabIndex,
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard),
-            label: 'TABLEAU DE BORD',
+      child: isMobile
+          ? _buildCompactBottomNav() // Icons only for mobile
+          : _buildFullBottomNav(), // Labels for tablet/desktop
+    );
+  }
+
+  /// Compact mobile navigation - icons only
+  Widget _buildCompactBottomNav() {
+    return BottomNavigationBar(
+      backgroundColor: Colors.white,
+      selectedItemColor: AppColors.primary,
+      unselectedItemColor: Colors.grey,
+      currentIndex: _selectedTabIndex,
+      type: BottomNavigationBarType.shifting,
+      showSelectedLabels: false,
+      showUnselectedLabels: false,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.dashboard),
+          label: 'Tableau',
+          tooltip: 'Tableau de Bord',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.assignment),
+          label: 'Missions',
+          tooltip: 'Missions',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.medical_services),
+          label: 'Ã‰quipement',
+          tooltip: 'Ã‰quipement',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.location_on),
+          label: 'Suivi',
+          tooltip: 'Suivi Driver',
+        ),
+      ],
+      onTap: (index) {
+        if (mounted) {
+          setState(() {
+            _selectedTabIndex = index;
+            if (index == 0) {
+              _dashboardData = _loadDashboardData();
+            }
+          });
+        }
+      },
+    );
+  }
+
+  /// Full bottom navigation with labels
+  Widget _buildFullBottomNav() {
+    return BottomNavigationBar(
+      backgroundColor: Colors.white,
+      selectedItemColor: AppColors.primary,
+      unselectedItemColor: Colors.grey,
+      currentIndex: _selectedTabIndex,
+      type: BottomNavigationBarType.fixed,
+      items: const [
+        BottomNavigationBarItem(
+          icon: Icon(Icons.dashboard),
+          label: 'TABLEAU DE BORD',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.assignment),
+          label: 'MISSIONS',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.medical_services),
+          label: 'Ã‰QUIPEMENT',
+        ),
+        BottomNavigationBarItem(
+          icon: Icon(Icons.location_on),
+          label: 'SUIVI',
+        ),
+      ],
+      onTap: (index) {
+        if (mounted) {
+          setState(() {
+            _selectedTabIndex = index;
+            if (index == 0) {
+              _dashboardData = _loadDashboardData();
+            }
+          });
+        }
+      },
+    );
+  }
+
+  Color _getMaintenanceStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'terminÃ©':
+      case 'completed':
+      case 'vidange':
+      case 'oil change':
+      case 'brake pad replacement':
+        return Colors.green;
+      case 'urgent':
+      case 'engine oil change':
+        return Colors.red;
+      case 'pending':
+      case 'en attente':
+        return Colors.orange;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  void _showMaintenanceDetailsDialog(
+      MaintenanceRecord record, Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('DÃ©tails de l\'Entretien'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildDetailRow('Date:', record.date),
+              const SizedBox(height: 12),
+              _buildDetailRow('Type d\'Entretien:', record.maintenanceType),
+              const SizedBox(height: 12),
+              _buildDetailRow('Description:', record.maintenanceDescription),
+              const SizedBox(height: 12),
+              _buildDetailRow('MÃ©canicien:', record.mechanicName ?? '-'),
+              const SizedBox(height: 12),
+              _buildDetailRow(
+                'CoÃ»t:',
+                record.pricePerPiece != null
+                    ? '${record.pricePerPiece!.toStringAsFixed(2)} TND'
+                    : '-',
+              ),
+              const SizedBox(height: 12),
+              _buildDetailRow('Notes:',
+                  record.notes?.isEmpty ?? true ? '-' : record.notes!),
+              const SizedBox(height: 12),
+              _buildDetailRow('Chauffeur:', record.driverName ?? '-'),
+              const SizedBox(height: 12),
+              _buildDetailRow(
+                'KilomÃ©trage:',
+                record.kilometrage != null
+                    ? '${record.kilometrage!.toStringAsFixed(2)} km'
+                    : '-',
+              ),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.assignment),
-            label: 'MISSIONS',
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
           ),
         ],
-        onTap: (index) {
-          if (mounted) {
-            setState(() {
-              _selectedTabIndex = index;
-            });
-          }
-        },
       ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 120,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+              color: Colors.grey,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1502,8 +2499,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     final shouldLogout = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Déconnexion'),
-        content: const Text('Êtes-vous sûr de vouloir vous déconnecter?'),
+        title: const Text('DÃ©connexion'),
+        content: const Text('ÃŠtes-vous sÃ»r de vouloir vous dÃ©connecter?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -1511,14 +2508,15 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Déconnexion'),
+            child: const Text('DÃ©connexion'),
           ),
         ],
       ),
     );
 
     if (shouldLogout == true) {
-      // Perform logout and redirect to login
+      // Perform logout and clear persistent session
+      await AuthService().logout();
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/login');
       }
@@ -1551,6 +2549,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
   late TextEditingController notesController;
   late TextEditingController fromLocationManualController;
   late TextEditingController toLocationManualController;
+  late TextEditingController customPriorityController;
 
   String selectedPriority = 'normal';
   String selectedFromLocationType = 'domicile';
@@ -1560,6 +2559,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
   String selectedFromCity = 'Sfax';
   String selectedToCity = 'Sfax';
   bool isLoading = false;
+  List<String> customPriorityOptions = [];
 
   @override
   void initState() {
@@ -1572,8 +2572,27 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
     notesController = TextEditingController();
     fromLocationManualController = TextEditingController();
     toLocationManualController = TextEditingController();
+    customPriorityController = TextEditingController();
     selectedFromClinic = LocationData.clinicsSfax[0];
     selectedToClinic = LocationData.clinicsSfax[0];
+    _loadCustomPriorities();
+  }
+
+  Future<void> _loadCustomPriorities() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getStringList('custom_priorities') ?? [];
+    setState(() {
+      customPriorityOptions = saved;
+    });
+  }
+
+  Future<void> _saveCustomPriority(String priority) async {
+    if (priority.isEmpty || customPriorityOptions.contains(priority)) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    customPriorityOptions.add(priority);
+    await prefs.setStringList('custom_priorities', customPriorityOptions);
   }
 
   @override
@@ -1585,6 +2604,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
     notesController.dispose();
     fromLocationManualController.dispose();
     toLocationManualController.dispose();
+    customPriorityController.dispose();
     super.dispose();
   }
 
@@ -1594,6 +2614,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
           ? fromLocationManualController.text
           : 'domicile';
     } else {
+      // If clinic type is selected but no clinic chosen, return empty
       return selectedFromClinic;
     }
   }
@@ -1604,6 +2625,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
           ? toLocationManualController.text
           : 'domicile';
     } else {
+      // If clinic type is selected but no clinic chosen, return empty
       return selectedToClinic;
     }
   }
@@ -1616,10 +2638,18 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
     setState(() => isLoading = true);
 
     try {
+      // Get the actual priority to use
+      String finalPriority = selectedPriority;
+      if (selectedPriority == 'autre') {
+        finalPriority = customPriorityController.text.trim();
+        // Save custom priority for future use
+        await _saveCustomPriority(finalPriority);
+      }
+
       final medicine = await widget.missionService.createMission(
         fromLocation: _getFromLocation(),
         toLocation: _getToLocation(),
-        priority: selectedPriority,
+        priority: finalPriority,
         patientFirstName: patientNameController.text.split(' ').first,
         patientLastName: patientNameController.text.split(' ').length > 1
             ? patientNameController.text.split(' ').last
@@ -1631,9 +2661,11 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
       );
 
       if (mounted) {
+        // MissionService already sends notifications, so no need to send again here
         ScaffoldMessenger.of(widget.parentContext).showSnackBar(
           SnackBar(
-            content: Text('Mission ${medicine.missionNumber} créée avec succès'),
+            content:
+                Text('Mission ${medicine.missionNumber} crÃ©Ã©e avec succÃ¨s'),
             backgroundColor: Colors.green,
           ),
         );
@@ -1669,11 +2701,15 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Ajouter une Mission en Attente',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                    Expanded(
+                      child: Text(
+                        'Ajouter une Mission en Attente',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                     IconButton(
                       onPressed: () => Navigator.pop(context),
@@ -1704,7 +2740,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
 
                 // Priority
                 Text(
-                  'Priorité',
+                  'PrioritÃ©',
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
                 const SizedBox(height: 8),
@@ -1722,20 +2758,104 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                   items: LocationData.priorityOptions.map((priority) {
                     return DropdownMenuItem(
                       value: priority,
-                      child: Text(LocationData.getPriorityDisplayName(priority)),
+                      child:
+                          Text(LocationData.getPriorityDisplayName(priority)),
                     );
                   }).toList(),
                   onChanged: (value) {
                     if (value != null) {
-                      setState(() => selectedPriority = value);
+                      setState(() {
+                        selectedPriority = value;
+                        if (value != 'autre') {
+                          customPriorityController.clear();
+                        }
+                      });
                     }
                   },
                 ),
+                const SizedBox(height: 12),
+
+                // Custom priority input (visible only when "autre" is selected)
+                if (selectedPriority == 'autre') ...[
+                  Text(
+                    'Veuillez entrer votre prioritÃ© personnalisÃ©e',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: Colors.grey[600],
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: customPriorityController,
+                    decoration: InputDecoration(
+                      hintText: 'ex: suivi post-opÃ©ratoire',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                      prefixIcon: const Icon(Icons.edit),
+                    ),
+                    validator: (value) {
+                      if (value?.isEmpty ?? true) {
+                        return 'Veuillez entrer une prioritÃ©';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Show previously used custom priorities
+                  if (customPriorityOptions.isNotEmpty) ...[
+                    Text(
+                      'PrioritÃ©s personnalisÃ©es rÃ©centes',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: Colors.grey[600],
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: customPriorityOptions.map((option) {
+                        return InkWell(
+                          onTap: () {
+                            setState(() {
+                              customPriorityController.text = option;
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 8,
+                            ),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: AppColors.primary),
+                              borderRadius: BorderRadius.circular(20),
+                              color: Colors.white,
+                            ),
+                            child: Text(
+                              option,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: AppColors.primary,
+                                  ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ],
                 const SizedBox(height: 16),
 
-                // Lieu de Départ
+                // Lieu de DÃ©part
                 Text(
-                  'Lieu de Départ',
+                  'Lieu de DÃ©part',
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
                 const SizedBox(height: 8),
@@ -1747,7 +2867,12 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                   selectedFromClinic,
                   (value) => setState(() => selectedFromClinic = value!),
                   selectedFromCity,
-                  (value) => setState(() => selectedFromCity = value!),
+                  (value) {
+                    setState(() {
+                      selectedFromCity = value!;
+                      selectedFromClinic = ''; // Reset clinic when city changes
+                    });
+                  },
                 ),
                 const SizedBox(height: 16),
 
@@ -1765,7 +2890,12 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                   selectedToClinic,
                   (value) => setState(() => selectedToClinic = value!),
                   selectedToCity,
-                  (value) => setState(() => selectedToCity = value!),
+                  (value) {
+                    setState(() {
+                      selectedToCity = value!;
+                      selectedToClinic = ''; // Reset clinic when city changes
+                    });
+                  },
                 ),
                 const SizedBox(height: 16),
 
@@ -1792,14 +2922,14 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
 
                 // Patient Phone
                 Text(
-                  'Téléphone du Patient',
+                  'TÃ©lÃ©phone du Patient',
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
                 const SizedBox(height: 8),
                 TextFormField(
                   controller: patientPhoneController,
                   decoration: InputDecoration(
-                    hintText: 'Numéro de téléphone',
+                    hintText: 'NumÃ©ro de tÃ©lÃ©phone',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -1812,9 +2942,9 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                 ),
                 const SizedBox(height: 16),
 
-                // Infirmier/Médecin
+                // Infirmier/MÃ©decin
                 Text(
-                  'Infirmier/Médecin',
+                  'Infirmier/MÃ©decin',
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
                 const SizedBox(height: 8),
@@ -1882,7 +3012,8 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     ElevatedButton(
-                      onPressed: isLoading ? null : () => Navigator.pop(context),
+                      onPressed:
+                          isLoading ? null : () => Navigator.pop(context),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.grey[300],
                         foregroundColor: Colors.black,
@@ -1936,7 +3067,7 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
               child: SegmentedButton<String>(
                 segments: const [
                   ButtonSegment(label: Text('Domicile'), value: 'domicile'),
-                  ButtonSegment(label: Text('CHU'), value: 'chu'),
+                  ButtonSegment(label: Text('clinique'), value: 'chu'),
                 ],
                 selected: <String>{locationType},
                 onSelectionChanged: (Set<String> newSelection) {
@@ -1965,7 +3096,8 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Sélectionner la Ville', style: Theme.of(context).textTheme.labelSmall),
+              Text('SÃ©lectionner la Ville',
+                  style: Theme.of(context).textTheme.labelSmall),
               const SizedBox(height: 4),
               DropdownButtonFormField<String>(
                 value: selectedCity,
@@ -1997,29 +3129,16 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
                 },
               ),
               const SizedBox(height: 12),
-              Text('Sélectionner la Clinique/Hôpital',
+              Text('SÃ©lectionner la Clinique/HÃ´pital',
                   style: Theme.of(context).textTheme.labelSmall),
               const SizedBox(height: 4),
-              DropdownButtonFormField<String>(
+              ClinicDropdownField(
                 value: selectedCity == 'Sfax'
                     ? selectedClinic
                     : LocationData.clinicsSfax[0],
-                decoration: InputDecoration(
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                ),
-                items: LocationData.clinicsSfax.map((clinic) {
-                  return DropdownMenuItem(value: clinic, child: Text(clinic));
-                }).toList(),
+                selectedCity: selectedCity,
                 onChanged: (value) {
-                  if (value != null) {
-                    onClinicChange(value);
-                  }
+                  onClinicChange(value);
                 },
               ),
             ],
@@ -2028,3 +3147,4 @@ class _AddMissionDialogState extends State<AddMissionDialog> {
     );
   }
 }
+

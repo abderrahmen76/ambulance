@@ -11,10 +11,8 @@ import '../utils/responsive.dart';
 class MissionTechnicalSheetScreen extends StatefulWidget {
   final Mission mission;
 
-  const MissionTechnicalSheetScreen({
-    Key? key,
-    required this.mission,
-  }) : super(key: key);
+  const MissionTechnicalSheetScreen({Key? key, required this.mission})
+    : super(key: key);
 
   @override
   State<MissionTechnicalSheetScreen> createState() =>
@@ -156,7 +154,8 @@ class _MissionTechnicalSheetScreenState
     }
     _patientNameController = TextEditingController(text: fullName);
     _ageController = TextEditingController(
-        text: _currentMission.patientAge?.toString() ?? '');
+      text: _currentMission.patientAge?.toString() ?? '',
+    );
     _taBeforeController = TextEditingController();
     _taAfterController = TextEditingController();
     _fcBeforeController = TextEditingController();
@@ -178,21 +177,28 @@ class _MissionTechnicalSheetScreenState
     try {
       debugPrint('[MissionTechnicalSheet] Refreshing mission data...');
       // Fetch fresh mission data from Supabase
-      final freshMission =
-          await _missionService.getMissionById(_currentMission.id);
-      final privatePayload =
-          await _missionPrivateService.getMissionPrivateData(_currentMission.id);
+      final freshMission = await _missionService.getMissionById(
+        _currentMission.id,
+      );
+      final privatePayload = await _missionPrivateService.getMissionPrivateData(
+        _currentMission.id,
+      );
       debugPrint(
-          '[MissionTechnicalSheet] Fresh mission fetched: ${freshMission?.id}');
+        '[MissionTechnicalSheet] Fresh mission fetched: ${freshMission?.id}',
+      );
       if (freshMission != null && mounted) {
-        final mergedMission =
-            _mergeMissionWithPrivatePayload(freshMission, privatePayload);
+        final mergedMission = _mergeMissionWithPrivatePayload(
+          freshMission,
+          privatePayload,
+        );
         setState(() {
           _currentMission = mergedMission;
           debugPrint(
-              '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}');
+            '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}',
+          );
           debugPrint(
-              '[MissionTechnicalSheet] Patient Needs Raw: ${_currentMission.patientNeeds}');
+            '[MissionTechnicalSheet] Patient Needs Raw: ${_currentMission.patientNeeds}',
+          );
           // Clear existing controllers and reload
           _patientNameController.clear();
           _ageController.clear();
@@ -238,18 +244,24 @@ class _MissionTechnicalSheetScreenState
     final mergedJson = mission.toJson();
 
     if (contact.isNotEmpty) {
-      mergedJson['patient_name'] = contact['patient_name'] ?? mergedJson['patient_name'];
+      mergedJson['patient_name'] =
+          contact['patient_name'] ?? mergedJson['patient_name'];
       mergedJson['patient_first_name'] =
           contact['patient_first_name'] ?? mergedJson['patient_first_name'];
       mergedJson['patient_last_name'] =
           contact['patient_last_name'] ?? mergedJson['patient_last_name'];
-      mergedJson['patient_phone'] = contact['patient_phone'] ?? mergedJson['patient_phone'];
-      mergedJson['patient_age'] = contact['patient_age'] ?? mergedJson['patient_age'];
-      mergedJson['pickup_address'] = contact['pickup_address'] ?? mergedJson['pickup_address'];
+      mergedJson['patient_phone'] =
+          contact['patient_phone'] ?? mergedJson['patient_phone'];
+      mergedJson['patient_age'] =
+          contact['patient_age'] ?? mergedJson['patient_age'];
+      mergedJson['pickup_address'] =
+          contact['pickup_address'] ?? mergedJson['pickup_address'];
       mergedJson['destination_address'] =
           contact['destination_address'] ?? mergedJson['destination_address'];
-      mergedJson['pickup_lat'] = contact['pickup_lat'] ?? mergedJson['pickup_lat'];
-      mergedJson['pickup_lng'] = contact['pickup_lng'] ?? mergedJson['pickup_lng'];
+      mergedJson['pickup_lat'] =
+          contact['pickup_lat'] ?? mergedJson['pickup_lat'];
+      mergedJson['pickup_lng'] =
+          contact['pickup_lng'] ?? mergedJson['pickup_lng'];
       mergedJson['destination_lat'] =
           contact['destination_lat'] ?? mergedJson['destination_lat'];
       mergedJson['destination_lng'] =
@@ -257,15 +269,18 @@ class _MissionTechnicalSheetScreenState
     }
 
     if (medical.isNotEmpty) {
-      mergedJson['report_type'] = medical['report_type'] ?? mergedJson['report_type'];
+      mergedJson['report_type'] =
+          medical['report_type'] ?? mergedJson['report_type'];
       mergedJson['fractures_injuries'] =
           medical['fractures_injuries'] ?? mergedJson['fractures_injuries'];
       mergedJson['report_filled_at'] =
           medical['report_filled_at'] ?? mergedJson['report_filled_at'];
       mergedJson['medical_history'] =
           medical['medical_history'] ?? mergedJson['medical_history'];
-      mergedJson['vital_signs'] = medical['vital_signs'] ?? mergedJson['vital_signs'];
-      mergedJson['patient_needs'] = medical['patient_needs'] ?? mergedJson['patient_needs'];
+      mergedJson['vital_signs'] =
+          medical['vital_signs'] ?? mergedJson['vital_signs'];
+      mergedJson['patient_needs'] =
+          medical['patient_needs'] ?? mergedJson['patient_needs'];
     }
 
     return Mission.fromJson(mergedJson);
@@ -273,7 +288,8 @@ class _MissionTechnicalSheetScreenState
 
   Future<void> _loadLinkedClinics() async {
     try {
-      final clinics = await _missionService.getLinkedClinicsForCurrentProvider();
+      final clinics = await _missionService
+          .getLinkedClinicsForCurrentProvider();
       if (!mounted) {
         return;
       }
@@ -305,22 +321,27 @@ class _MissionTechnicalSheetScreenState
     _patientNameController.text = fullName;
     _ageController.text = _currentMission.patientAge?.toString() ?? '';
     debugPrint(
-        '[MissionTechnicalSheet] Patient Name: $fullName, Age: ${_currentMission.patientAge}');
+      '[MissionTechnicalSheet] Patient Name: $fullName, Age: ${_currentMission.patientAge}',
+    );
 
     // Load existing vital signs
     debugPrint(
-        '[MissionTechnicalSheet] Vital Signs is null: ${_currentMission.vitalSigns == null}');
+      '[MissionTechnicalSheet] Vital Signs is null: ${_currentMission.vitalSigns == null}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Vital Signs isEmpty: ${_currentMission.vitalSigns?.isEmpty}');
+      '[MissionTechnicalSheet] Vital Signs isEmpty: ${_currentMission.vitalSigns?.isEmpty}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Vital Signs type: ${_currentMission.vitalSigns.runtimeType}');
+      '[MissionTechnicalSheet] Vital Signs type: ${_currentMission.vitalSigns.runtimeType}',
+    );
     if (_currentMission.vitalSigns != null &&
         _currentMission.vitalSigns!.isNotEmpty) {
       try {
         dynamic vitalSignsData = _currentMission.vitalSigns!;
         debugPrint('[MissionTechnicalSheet] Raw vital signs: $vitalSignsData');
         debugPrint(
-            '[MissionTechnicalSheet] Vital signs is String: ${vitalSignsData is String}');
+          '[MissionTechnicalSheet] Vital signs is String: ${vitalSignsData is String}',
+        );
 
         // If it's a string, decode it (JSON stored as string)
         if (vitalSignsData is String) {
@@ -330,7 +351,8 @@ class _MissionTechnicalSheetScreenState
         }
 
         debugPrint(
-            '[MissionTechnicalSheet] Vital signs is Map: ${vitalSignsData is Map<String, dynamic>}');
+          '[MissionTechnicalSheet] Vital signs is Map: ${vitalSignsData is Map<String, dynamic>}',
+        );
         if (vitalSignsData is Map<String, dynamic>) {
           _taBeforeController.text =
               vitalSignsData['ta_before']?.toString() ?? '';
@@ -357,7 +379,8 @@ class _MissionTechnicalSheetScreenState
           _spo2AfterController.text =
               vitalSignsData['spo2_after']?.toString() ?? '';
           debugPrint(
-              '[MissionTechnicalSheet] Vital signs loaded: TA_BEFORE=${_taBeforeController.text}, TA_AFTER=${_taAfterController.text}, FC_BEFORE=${_fcBeforeController.text}, FC_AFTER=${_fcAfterController.text}, FR_BEFORE=${_frBeforeController.text}, FR_AFTER=${_frAfterController.text}, TEMP_BEFORE=${_temperatureBeforeController.text}, TEMP_AFTER=${_temperatureAfterController.text}, GLUCOSE_BEFORE=${_glucoseBeforeController.text}, GLUCOSE_AFTER=${_glucoseAfterController.text}, SPO2_BEFORE=${_spo2BeforeController.text}, SPO2_AFTER=${_spo2AfterController.text}');
+            '[MissionTechnicalSheet] Vital signs loaded: TA_BEFORE=${_taBeforeController.text}, TA_AFTER=${_taAfterController.text}, FC_BEFORE=${_fcBeforeController.text}, FC_AFTER=${_fcAfterController.text}, FR_BEFORE=${_frBeforeController.text}, FR_AFTER=${_frAfterController.text}, TEMP_BEFORE=${_temperatureBeforeController.text}, TEMP_AFTER=${_temperatureAfterController.text}, GLUCOSE_BEFORE=${_glucoseBeforeController.text}, GLUCOSE_AFTER=${_glucoseAfterController.text}, SPO2_BEFORE=${_spo2BeforeController.text}, SPO2_AFTER=${_spo2AfterController.text}',
+          );
         }
       } catch (e) {
         debugPrint('[MissionTechnicalSheet] Error loading vital signs: $e');
@@ -387,8 +410,9 @@ class _MissionTechnicalSheetScreenState
 
           // Mark checked items from database
           for (var item in historyList) {
-            bool isDefault =
-                defaultMedicalHistoryOptions.any((opt) => opt.$1 == item);
+            bool isDefault = defaultMedicalHistoryOptions.any(
+              (opt) => opt.$1 == item,
+            );
             if (isDefault) {
               medicalHistoryChecked[item] = true;
             } else {
@@ -415,16 +439,18 @@ class _MissionTechnicalSheetScreenState
       if (needId == 'vni' || needId == 'vc') {
         // Initialize nested quantity controllers
         for (var nestedOption in nestedPatientNeedsOptions[needId] ?? []) {
-          nestedQuantities[needId]![nestedOption] =
-              TextEditingController(text: '0');
+          nestedQuantities[needId]![nestedOption] = TextEditingController(
+            text: '0',
+          );
         }
       } else if (needId == 'pse') {
         // Initialize parent quantity for PSE
         patientNeedsState[label] = TextEditingController(text: '0');
         // Initialize nested quantity and time controllers
         for (var nestedOption in nestedPatientNeedsOptions[needId] ?? []) {
-          nestedQuantities[needId]![nestedOption] =
-              TextEditingController(text: '0');
+          nestedQuantities[needId]![nestedOption] = TextEditingController(
+            text: '0',
+          );
           pseTimeInputs[nestedOption] = TextEditingController(text: '');
         }
       } else {
@@ -433,15 +459,19 @@ class _MissionTechnicalSheetScreenState
       }
     }
     debugPrint(
-        '[MissionTechnicalSheet] Patient needs state initialized: ${patientNeedsState.keys.toList()}');
+      '[MissionTechnicalSheet] Patient needs state initialized: ${patientNeedsState.keys.toList()}',
+    );
 
     // Load existing patient needs
     debugPrint(
-        '[MissionTechnicalSheet] Patient needs is null: ${_currentMission.patientNeeds == null}');
+      '[MissionTechnicalSheet] Patient needs is null: ${_currentMission.patientNeeds == null}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Patient needs isEmpty: ${_currentMission.patientNeeds?.isEmpty}');
+      '[MissionTechnicalSheet] Patient needs isEmpty: ${_currentMission.patientNeeds?.isEmpty}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Patient needs type: ${_currentMission.patientNeeds.runtimeType}');
+      '[MissionTechnicalSheet] Patient needs type: ${_currentMission.patientNeeds.runtimeType}',
+    );
     if (_currentMission.patientNeeds != null &&
         _currentMission.patientNeeds!.isNotEmpty) {
       try {
@@ -455,35 +485,42 @@ class _MissionTechnicalSheetScreenState
           try {
             decodeCount++;
             debugPrint(
-                '[MissionTechnicalSheet] Decode attempt $decodeCount...');
+              '[MissionTechnicalSheet] Decode attempt $decodeCount...',
+            );
             needsData = jsonDecode(needsData);
             debugPrint(
-                '[MissionTechnicalSheet] After decode $decodeCount: $needsData');
+              '[MissionTechnicalSheet] After decode $decodeCount: $needsData',
+            );
           } catch (e) {
             // If decode fails, it's not JSON - break out
             debugPrint(
-                '[MissionTechnicalSheet] Decode failed at attempt $decodeCount: $e');
+              '[MissionTechnicalSheet] Decode failed at attempt $decodeCount: $e',
+            );
             break;
           }
         }
         debugPrint(
-            '[MissionTechnicalSheet] Final patient needs data type: ${needsData.runtimeType}');
+          '[MissionTechnicalSheet] Final patient needs data type: ${needsData.runtimeType}',
+        );
         debugPrint('[MissionTechnicalSheet] Final patient needs: $needsData');
 
         if (needsData is List) {
           debugPrint(
-              '[MissionTechnicalSheet] Processing patient needs as List with ${needsData.length} items');
+            '[MissionTechnicalSheet] Processing patient needs as List with ${needsData.length} items',
+          );
           for (var item in needsData) {
             if (item is Map<String, dynamic>) {
               final needName = item['name'] as String?;
               final quantity = item['quantity']?.toString() ?? '0';
               final children = item['children'] as List? ?? [];
               debugPrint(
-                  '[MissionTechnicalSheet] Processing need: $needName with quantity: $quantity, children: ${children.length}');
+                '[MissionTechnicalSheet] Processing need: $needName with quantity: $quantity, children: ${children.length}',
+              );
 
               if (needName != null && needName.isNotEmpty) {
-                bool isDefault =
-                    defaultPatientNeedsOptions.any((opt) => opt.$1 == needName);
+                bool isDefault = defaultPatientNeedsOptions.any(
+                  (opt) => opt.$1 == needName,
+                );
 
                 if (isDefault) {
                   final option = defaultPatientNeedsOptions.firstWhere(
@@ -501,8 +538,9 @@ class _MissionTechnicalSheetScreenState
                           final childName = child['name'] as String?;
                           final childQty = child['quantity']?.toString() ?? '0';
                           if (childName != null &&
-                              nestedQuantities[needId]!
-                                  .containsKey(childName)) {
+                              nestedQuantities[needId]!.containsKey(
+                                childName,
+                              )) {
                             nestedQuantities[needId]![childName]!.text =
                                 childQty;
                           }
@@ -519,8 +557,9 @@ class _MissionTechnicalSheetScreenState
                           final childQty = child['quantity']?.toString() ?? '0';
                           final childTime = child['time']?.toString() ?? '';
                           if (childName != null) {
-                            if (nestedQuantities[needId]!
-                                .containsKey(childName)) {
+                            if (nestedQuantities[needId]!.containsKey(
+                              childName,
+                            )) {
                               nestedQuantities[needId]![childName]!.text =
                                   childQty;
                             }
@@ -537,16 +576,19 @@ class _MissionTechnicalSheetScreenState
                   }
 
                   debugPrint(
-                      '[MissionTechnicalSheet] Updated default need: $needName = $quantity');
+                    '[MissionTechnicalSheet] Updated default need: $needName = $quantity',
+                  );
                 } else {
                   // Custom patient need item
                   if (!customPatientNeedsItems.contains(needName)) {
                     customPatientNeedsItems.add(needName);
                   }
-                  patientNeedsState[needName] =
-                      TextEditingController(text: quantity);
+                  patientNeedsState[needName] = TextEditingController(
+                    text: quantity,
+                  );
                   debugPrint(
-                      '[MissionTechnicalSheet] Added custom need: $needName = $quantity');
+                    '[MissionTechnicalSheet] Added custom need: $needName = $quantity',
+                  );
                 }
               }
             }
@@ -556,11 +598,13 @@ class _MissionTechnicalSheetScreenState
           debugPrint('[MissionTechnicalSheet] Processing patient needs as Map');
           needsData.forEach((needName, value) {
             debugPrint(
-                '[MissionTechnicalSheet] Processing (Map): $needName = $value');
+              '[MissionTechnicalSheet] Processing (Map): $needName = $value',
+            );
 
             if (needName is String) {
-              bool isDefault =
-                  defaultPatientNeedsOptions.any((opt) => opt.$1 == needName);
+              bool isDefault = defaultPatientNeedsOptions.any(
+                (opt) => opt.$1 == needName,
+              );
 
               // Extract data from value if it's a Map
               String quantity = '0';
@@ -615,7 +659,8 @@ class _MissionTechnicalSheetScreenState
                     }
                   }
                   debugPrint(
-                      '[MissionTechnicalSheet] Updated VNI/VC need (Map): $needName');
+                    '[MissionTechnicalSheet] Updated VNI/VC need (Map): $needName',
+                  );
                 } else if (needId == 'pse') {
                   // Handle PSE: parent quantity + children with quantity and time
                   patientNeedsState[needName]!.text = quantity;
@@ -626,8 +671,9 @@ class _MissionTechnicalSheetScreenState
                         final childQty = child['quantity']?.toString() ?? '0';
                         final childTime = child['time']?.toString() ?? '';
                         if (childName != null) {
-                          if (nestedQuantities[needId]!
-                              .containsKey(childName)) {
+                          if (nestedQuantities[needId]!.containsKey(
+                            childName,
+                          )) {
                             nestedQuantities[needId]![childName]!.text =
                                 childQty;
                           }
@@ -639,17 +685,20 @@ class _MissionTechnicalSheetScreenState
                     }
                   }
                   debugPrint(
-                      '[MissionTechnicalSheet] Updated PSE need (Map): $needName = $quantity');
+                    '[MissionTechnicalSheet] Updated PSE need (Map): $needName = $quantity',
+                  );
                 } else {
                   // Regular items with quantity only
                   if (patientNeedsState[needName] != null) {
                     patientNeedsState[needName]!.text = quantity;
                   } else {
-                    patientNeedsState[needName] =
-                        TextEditingController(text: quantity);
+                    patientNeedsState[needName] = TextEditingController(
+                      text: quantity,
+                    );
                   }
                   debugPrint(
-                      '[MissionTechnicalSheet] Updated default need (Map): $needName = $quantity');
+                    '[MissionTechnicalSheet] Updated default need (Map): $needName = $quantity',
+                  );
                 }
               } else if (!isDefault && quantity != '0') {
                 // Custom patient need item
@@ -657,17 +706,20 @@ class _MissionTechnicalSheetScreenState
                   customPatientNeedsItems.add(needName);
                 }
                 if (!patientNeedsState.containsKey(needName)) {
-                  patientNeedsState[needName] =
-                      TextEditingController(text: quantity);
+                  patientNeedsState[needName] = TextEditingController(
+                    text: quantity,
+                  );
                 }
                 debugPrint(
-                    '[MissionTechnicalSheet] Added custom need (Map): $needName = $quantity');
+                  '[MissionTechnicalSheet] Added custom need (Map): $needName = $quantity',
+                );
               }
             }
           });
         } else {
           debugPrint(
-              '[MissionTechnicalSheet] Patient needs not List or Map, type: ${needsData.runtimeType}');
+            '[MissionTechnicalSheet] Patient needs not List or Map, type: ${needsData.runtimeType}',
+          );
         }
       } catch (e) {
         debugPrint('[MissionTechnicalSheet] Error loading patient needs: $e');
@@ -692,17 +744,21 @@ class _MissionTechnicalSheetScreenState
     // Final summary log
     debugPrint('[MissionTechnicalSheet] === FINAL STATE ===');
     debugPrint(
-        '[MissionTechnicalSheet] Patient: ${_patientNameController.text}, Age: ${_ageController.text}');
+      '[MissionTechnicalSheet] Patient: ${_patientNameController.text}, Age: ${_ageController.text}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Vital Signs - TA_BEFORE: ${_taBeforeController.text}, TA_AFTER: ${_taAfterController.text}, SPO2_BEFORE: ${_spo2BeforeController.text}, SPO2_AFTER: ${_spo2AfterController.text}, FC_BEFORE: ${_fcBeforeController.text}, FC_AFTER: ${_fcAfterController.text}, FR_BEFORE: ${_frBeforeController.text}, FR_AFTER: ${_frAfterController.text}, TEMP_BEFORE: ${_temperatureBeforeController.text}, TEMP_AFTER: ${_temperatureAfterController.text}, GLUCOSE_BEFORE: ${_glucoseBeforeController.text}, GLUCOSE_AFTER: ${_glucoseAfterController.text}');
+      '[MissionTechnicalSheet] Vital Signs - TA_BEFORE: ${_taBeforeController.text}, TA_AFTER: ${_taAfterController.text}, SPO2_BEFORE: ${_spo2BeforeController.text}, SPO2_AFTER: ${_spo2AfterController.text}, FC_BEFORE: ${_fcBeforeController.text}, FC_AFTER: ${_fcAfterController.text}, FR_BEFORE: ${_frBeforeController.text}, FR_AFTER: ${_frAfterController.text}, TEMP_BEFORE: ${_temperatureBeforeController.text}, TEMP_AFTER: ${_temperatureAfterController.text}, GLUCOSE_BEFORE: ${_glucoseBeforeController.text}, GLUCOSE_AFTER: ${_glucoseAfterController.text}',
+    );
     debugPrint(
-        '[MissionTechnicalSheet] Patient Needs State Keys: ${patientNeedsState.keys.toList()}');
+      '[MissionTechnicalSheet] Patient Needs State Keys: ${patientNeedsState.keys.toList()}',
+    );
     debugPrint('[MissionTechnicalSheet] Patient Needs Values:');
     patientNeedsState.forEach((key, controller) {
       debugPrint('[MissionTechnicalSheet]   $key = ${controller.text}');
     });
     debugPrint(
-        '[MissionTechnicalSheet] Custom Patient Needs: $customPatientNeedsItems');
+      '[MissionTechnicalSheet] Custom Patient Needs: $customPatientNeedsItems',
+    );
     debugPrint('[MissionTechnicalSheet] === END FINAL STATE ===');
   }
 
@@ -747,23 +803,30 @@ class _MissionTechnicalSheetScreenState
       // Split full name into first and last name
       final nameParts = _patientNameController.text.trim().split(' ');
       final firstName = nameParts.isNotEmpty ? nameParts.first : '';
-      final lastName =
-          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+      final lastName = nameParts.length > 1
+          ? nameParts.sublist(1).join(' ')
+          : '';
 
       // ALWAYS prepare vital signs data (regardless of report type)
       Map<String, dynamic> vitalSigns = {
-        'ta_before':
-            _taBeforeController.text.isEmpty ? null : _taBeforeController.text,
-        'ta_after':
-            _taAfterController.text.isEmpty ? null : _taAfterController.text,
-        'fc_before':
-            _fcBeforeController.text.isEmpty ? null : _fcBeforeController.text,
-        'fc_after':
-            _fcAfterController.text.isEmpty ? null : _fcAfterController.text,
-        'fr_before':
-            _frBeforeController.text.isEmpty ? null : _frBeforeController.text,
-        'fr_after':
-            _frAfterController.text.isEmpty ? null : _frAfterController.text,
+        'ta_before': _taBeforeController.text.isEmpty
+            ? null
+            : _taBeforeController.text,
+        'ta_after': _taAfterController.text.isEmpty
+            ? null
+            : _taAfterController.text,
+        'fc_before': _fcBeforeController.text.isEmpty
+            ? null
+            : _fcBeforeController.text,
+        'fc_after': _fcAfterController.text.isEmpty
+            ? null
+            : _fcAfterController.text,
+        'fr_before': _frBeforeController.text.isEmpty
+            ? null
+            : _frBeforeController.text,
+        'fr_after': _frAfterController.text.isEmpty
+            ? null
+            : _frAfterController.text,
         'temperature_before': _temperatureBeforeController.text.isEmpty
             ? null
             : _temperatureBeforeController.text,
@@ -804,30 +867,28 @@ class _MissionTechnicalSheetScreenState
 
         if (needId == 'vni' || needId == 'vc') {
           debugPrint(
-              '[MissionTechnicalSheet] Processing $needId ($needName)...');
+            '[MissionTechnicalSheet] Processing $needId ($needName)...',
+          );
           List<Map<String, dynamic>> children = [];
           for (var nested in nestedPatientNeedsOptions[needId] ?? []) {
             final nestedQty = nestedQuantities[needId]![nested]?.text ?? '0';
             debugPrint(
-                '[MissionTechnicalSheet]   $needId.$nested = $nestedQty');
+              '[MissionTechnicalSheet]   $needId.$nested = $nestedQty',
+            );
             if (nestedQty != '0') {
-              children.add({
-                'name': nested,
-                'quantity': nestedQty,
-              });
+              children.add({'name': nested, 'quantity': nestedQty});
             }
           }
           // Only add VNI/VC if there are children with quantities
           if (children.isNotEmpty) {
             debugPrint(
-                '[MissionTechnicalSheet] Saving $needId with ${children.length} children');
-            needsData.add({
-              'name': needName,
-              'children': children,
-            });
+              '[MissionTechnicalSheet] Saving $needId with ${children.length} children',
+            );
+            needsData.add({'name': needName, 'children': children});
           } else {
             debugPrint(
-                '[MissionTechnicalSheet] $needId has no children to save');
+              '[MissionTechnicalSheet] $needId has no children to save',
+            );
           }
         }
       }
@@ -873,10 +934,7 @@ class _MissionTechnicalSheetScreenState
         }
         // Regular items with quantity only
         else if (quantity != '0') {
-          needsData.add({
-            'name': needName,
-            'quantity': quantity,
-          });
+          needsData.add({'name': needName, 'quantity': quantity});
         }
       });
 
@@ -884,19 +942,23 @@ class _MissionTechnicalSheetScreenState
       debugPrint('[MissionTechnicalSheet] $needsData');
       debugPrint('[MissionTechnicalSheet] === End Final Data ===');
 
-      final medicalHistoryPayload =
-          _reportType == 'simple_transport' ? medicalHistoryList : <String>[];
-      final patientNeedsPayload =
-          _reportType == 'simple_transport' ? needsData : <String, dynamic>{};
+      final medicalHistoryPayload = _reportType == 'simple_transport'
+          ? medicalHistoryList
+          : <String>[];
+      final patientNeedsPayload = _reportType == 'simple_transport'
+          ? needsData
+          : <String, dynamic>{};
 
       await _missionPrivateService.saveTechnicalSheet(
         mission: _currentMission,
-        patientName:
-            _patientNameController.text.trim().isEmpty ? null : _patientNameController.text.trim(),
+        patientName: _patientNameController.text.trim().isEmpty
+            ? null
+            : _patientNameController.text.trim(),
         patientFirstName: firstName.isEmpty ? null : firstName,
         patientLastName: lastName.isEmpty ? null : lastName,
-        patientAge:
-            _ageController.text.isEmpty ? null : int.tryParse(_ageController.text),
+        patientAge: _ageController.text.isEmpty
+            ? null
+            : int.tryParse(_ageController.text),
         reportType: _reportType,
         fracturesInjuries: _selectedMotifTransport ?? '',
         vitalSigns: vitalSigns,
@@ -916,8 +978,9 @@ class _MissionTechnicalSheetScreenState
     } catch (e) {
       if (mounted) {
         _showSnackbar(
-            'Erreur lors de l\'enregistrement du rapport: ${e.toString()}',
-            Colors.red);
+          'Erreur lors de l\'enregistrement du rapport: ${e.toString()}',
+          Colors.red,
+        );
       }
       return false;
     } finally {
@@ -955,17 +1018,17 @@ class _MissionTechnicalSheetScreenState
       _isSendingToClinic = true;
     });
 
-      try {
-        await _missionService.sendTechnicalSheetToClinic(
-          mission: _currentMission,
-          clinicTenantId: _selectedClinicTenantId!,
-          clinicName: clinicName,
-        );
-        await _refreshMissionData();
+    try {
+      await _missionService.sendTechnicalSheetToClinic(
+        mission: _currentMission,
+        clinicTenantId: _selectedClinicTenantId!,
+        clinicName: clinicName,
+      );
+      await _refreshMissionData();
 
-        if (mounted) {
-          _showSnackbar('Fiche technique envoyee a $clinicName', Colors.green);
-        }
+      if (mounted) {
+        _showSnackbar('Fiche technique envoyee a $clinicName', Colors.green);
+      }
     } catch (e) {
       if (mounted) {
         _showSnackbar(
@@ -983,12 +1046,9 @@ class _MissionTechnicalSheetScreenState
   }
 
   void _showSnackbar(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-      ),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
   }
 
   @override
@@ -999,8 +1059,10 @@ class _MissionTechnicalSheetScreenState
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text('Fiche Technique Médicale',
-            style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'Fiche Technique Médicale',
+          style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+        ),
         centerTitle: true,
         backgroundColor: Colors.white,
         elevation: 0,
@@ -1014,7 +1076,10 @@ class _MissionTechnicalSheetScreenState
             _buildSectionHeader('👤 Informations du Patient'),
             const SizedBox(height: 16),
             _buildTextField(
-                'Nom Complet', _patientNameController, 'ex: Jean Dupont'),
+              'Nom Complet',
+              _patientNameController,
+              'ex: Jean Dupont',
+            ),
             const SizedBox(height: 12),
             _buildTextField('Âge', _ageController, 'Années'),
             const SizedBox(height: 12),
@@ -1057,12 +1122,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'TA Avant (MMHG)', _taBeforeController, '120/80'),
+                      'TA Avant (MMHG)',
+                      _taBeforeController,
+                      '120/80',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'TA Après (MMHG)', _taAfterController, '120/80'),
+                      'TA Après (MMHG)',
+                      _taAfterController,
+                      '120/80',
+                    ),
                   ),
                 ],
               ),
@@ -1072,12 +1143,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'FC Avant (BPM)', _fcBeforeController, '72'),
+                      'FC Avant (BPM)',
+                      _fcBeforeController,
+                      '72',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'FC Après (BPM)', _fcAfterController, '72'),
+                      'FC Après (BPM)',
+                      _fcAfterController,
+                      '72',
+                    ),
                   ),
                 ],
               ),
@@ -1087,12 +1164,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'FR Avant (RES/MIN)', _frBeforeController, '16'),
+                      'FR Avant (RES/MIN)',
+                      _frBeforeController,
+                      '16',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'FR Après (RES/MIN)', _frAfterController, '16'),
+                      'FR Après (RES/MIN)',
+                      _frAfterController,
+                      '16',
+                    ),
                   ),
                 ],
               ),
@@ -1102,12 +1185,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'Temp Avant (°C)', _temperatureBeforeController, '37'),
+                      'Temp Avant (°C)',
+                      _temperatureBeforeController,
+                      '37',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'Temp Après (°C)', _temperatureAfterController, '37'),
+                      'Temp Après (°C)',
+                      _temperatureAfterController,
+                      '37',
+                    ),
                   ),
                 ],
               ),
@@ -1117,12 +1206,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'Glucose Avant', _glucoseBeforeController, ''),
+                      'Glucose Avant',
+                      _glucoseBeforeController,
+                      '',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'Glucose Après', _glucoseAfterController, ''),
+                      'Glucose Après',
+                      _glucoseAfterController,
+                      '',
+                    ),
                   ),
                 ],
               ),
@@ -1132,12 +1227,18 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     child: _buildVitalSignField(
-                        'SpO2 Avant (%)', _spo2BeforeController, '98'),
+                      'SpO2 Avant (%)',
+                      _spo2BeforeController,
+                      '98',
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: _buildVitalSignField(
-                        'SpO2 Après (%)', _spo2AfterController, '98'),
+                      'SpO2 Après (%)',
+                      _spo2AfterController,
+                      '98',
+                    ),
                   ),
                 ],
               ),
@@ -1217,8 +1318,9 @@ class _MissionTechnicalSheetScreenState
                         width: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Enregistrer le Rapport'),
@@ -1233,7 +1335,8 @@ class _MissionTechnicalSheetScreenState
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _isLoading || _isSendingToClinic || _linkedClinics.isEmpty
+                onPressed:
+                    _isLoading || _isSendingToClinic || _linkedClinics.isEmpty
                     ? null
                     : _sendToSelectedClinic,
                 icon: const Icon(Icons.outbox),
@@ -1243,8 +1346,9 @@ class _MissionTechnicalSheetScreenState
                         width: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Envoyer la Fiche a la Clinique'),
@@ -1274,7 +1378,10 @@ class _MissionTechnicalSheetScreenState
   }
 
   Widget _buildTextField(
-      String label, TextEditingController controller, String hint) {
+    String label,
+    TextEditingController controller,
+    String hint,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1289,8 +1396,10 @@ class _MissionTechnicalSheetScreenState
               borderRadius: BorderRadius.circular(8),
               borderSide: BorderSide.none,
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
           ),
         ),
       ],
@@ -1298,12 +1407,17 @@ class _MissionTechnicalSheetScreenState
   }
 
   Widget _buildVitalSignField(
-      String label, TextEditingController controller, String hint) {
+    String label,
+    TextEditingController controller,
+    String hint,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+        ),
         const SizedBox(height: 6),
         TextField(
           controller: controller,
@@ -1314,8 +1428,10 @@ class _MissionTechnicalSheetScreenState
               borderRadius: BorderRadius.circular(8),
               borderSide: BorderSide.none,
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
             isDense: true,
           ),
         ),
@@ -1324,7 +1440,10 @@ class _MissionTechnicalSheetScreenState
   }
 
   Widget _buildTextArea(
-      String label, TextEditingController controller, String hint) {
+    String label,
+    TextEditingController controller,
+    String hint,
+  ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1340,8 +1459,10 @@ class _MissionTechnicalSheetScreenState
               borderRadius: BorderRadius.circular(8),
               borderSide: BorderSide.none,
             ),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
           ),
         ),
       ],
@@ -1349,7 +1470,9 @@ class _MissionTechnicalSheetScreenState
   }
 
   Widget _buildCheckboxGroup(
-      Map<String, bool> checkboxMap, List<(String, String)> options) {
+    Map<String, bool> checkboxMap,
+    List<(String, String)> options,
+  ) {
     return Column(
       children: options.map((option) {
         final (label, key) = option;
@@ -1450,8 +1573,9 @@ class _MissionTechnicalSheetScreenState
         ...defaultPatientNeedsOptions.map((option) {
           final needName = option.$1;
           final needId = option.$2;
-          final hasNestedOptions =
-              nestedPatientNeedsOptions.containsKey(needId);
+          final hasNestedOptions = nestedPatientNeedsOptions.containsKey(
+            needId,
+          );
 
           // VNI and VC: only show nested options with quantities (no parent)
           if (needId == 'vni' || needId == 'vc') {
@@ -1621,10 +1745,7 @@ class _MissionTechnicalSheetScreenState
                 children: [
                   Expanded(
                     flex: 2,
-                    child: Text(
-                      needName,
-                      style: const TextStyle(fontSize: 16),
-                    ),
+                    child: Text(needName, style: const TextStyle(fontSize: 16)),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -1661,10 +1782,7 @@ class _MissionTechnicalSheetScreenState
               children: [
                 Expanded(
                   flex: 2,
-                  child: Text(
-                    needName,
-                    style: const TextStyle(fontSize: 16),
-                  ),
+                  child: Text(needName, style: const TextStyle(fontSize: 16)),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
@@ -1723,9 +1841,7 @@ class _MissionTechnicalSheetScreenState
           controller: controller,
           decoration: InputDecoration(
             // hintText removed
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
         actions: [
@@ -1804,8 +1920,9 @@ class _MissionTechnicalSheetScreenState
                     customPatientNeedsItems.add(itemName);
                   }
                   // Initialize/update quantity
-                  patientNeedsState[itemName] =
-                      TextEditingController(text: quantity);
+                  patientNeedsState[itemName] = TextEditingController(
+                    text: quantity,
+                  );
                 });
                 Navigator.pop(context);
               }
@@ -1829,13 +1946,15 @@ class _MissionTechnicalSheetScreenState
   Future<void> _saveCustomMotifTransportOptions() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
-        'custom_motif_transport_options', customMotifTransportOptions);
+      'custom_motif_transport_options',
+      customMotifTransportOptions,
+    );
   }
 
   Widget _buildMotifTransportDropdown() {
     final allOptions = [
       ...defaultMotifTransportOptions,
-      ...customMotifTransportOptions
+      ...customMotifTransportOptions,
     ];
 
     return Column(
@@ -1850,10 +1969,10 @@ class _MissionTechnicalSheetScreenState
           value: _selectedMotifTransport,
           hint: const Text('Sélectionner un motif'),
           items: allOptions
-              .map((option) => DropdownMenuItem(
-                    value: option,
-                    child: Text(option),
-                  ))
+              .map(
+                (option) =>
+                    DropdownMenuItem(value: option, child: Text(option)),
+              )
               .toList(),
           onChanged: (value) {
             if (value == 'autre') {
@@ -1865,8 +1984,10 @@ class _MissionTechnicalSheetScreenState
             }
           },
           decoration: InputDecoration(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             prefixIcon: const Icon(Icons.local_hospital),
           ),

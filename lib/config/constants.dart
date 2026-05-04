@@ -24,6 +24,7 @@ class SupabaseConfig {
   static const String missionsTable = '/rest/v1/missions';
   static const String fuelCardsTable = '/rest/v1/fuel_cards';
   static const String maintenanceRecordsTable = '/rest/v1/maintenance_records';
+  static const String maintenanceRulesTable = '/rest/v1/maintenance_rules';
   static const String equipmentRentalsTable = '/rest/v1/equipment_rentals';
   static const String driverLocationsTable = '/rest/v1/driver_locations';
   static const String ambulanceLocationSnapshotsTable =
@@ -31,10 +32,10 @@ class SupabaseConfig {
 
   // HTTP Headers (deprecated - use ApiClient.getHeaders() instead for JWT support)
   static Map<String, String> get headers => {
-        'apikey': anonKey,
-        'Authorization': 'Bearer $anonKey',
-        'Content-Type': 'application/json',
-      };
+    'apikey': anonKey,
+    'Authorization': 'Bearer $anonKey',
+    'Content-Type': 'application/json',
+  };
 }
 
 /// App Configuration
@@ -60,8 +61,9 @@ class AppColors {
   static const Color textPrimary = Color(0xFF1E293B);
   static const Color textSecondary = Color(0xFF64748B);
   static const Color border = Color(0xFFE2E8F0);
-  static const Color lightPink =
-      Color(0xFFFCE7F3); // Light pink for input fields
+  static const Color lightPink = Color(
+    0xFFFCE7F3,
+  ); // Light pink for input fields
 }
 
 /// Clinics and Locations

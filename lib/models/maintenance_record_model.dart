@@ -17,8 +17,11 @@ class MaintenanceRecord {
   final String? createdAt;
   final String? updatedAt;
   final String? nextDueDate;
+  final double? nextDueKm;
   final int? intervalDays;
   final int? intervalKm;
+  final int? warningBeforeDays;
+  final int? warningBeforeKm;
   final double? kilometrage;
 
   MaintenanceRecord({
@@ -38,8 +41,11 @@ class MaintenanceRecord {
     this.createdAt,
     this.updatedAt,
     this.nextDueDate,
+    this.nextDueKm,
     this.intervalDays,
     this.intervalKm,
+    this.warningBeforeDays,
+    this.warningBeforeKm,
     this.kilometrage,
   });
 
@@ -47,7 +53,8 @@ class MaintenanceRecord {
   factory MaintenanceRecord.fromJson(Map<String, dynamic> json) {
     final priceValue = json['price_per_piece'];
     print(
-        '[MaintenanceRecord] Parsing record ID: ${json['id']}, price_per_piece: $priceValue (type: ${priceValue.runtimeType})');
+      '[MaintenanceRecord] Parsing record ID: ${json['id']}, price_per_piece: $priceValue (type: ${priceValue.runtimeType})',
+    );
 
     final parsedPrice = _toDoubleNullable(priceValue);
     print('[MaintenanceRecord] Parsed price: $parsedPrice');
@@ -69,34 +76,40 @@ class MaintenanceRecord {
       createdAt: json['created_at'] as String?,
       updatedAt: json['updated_at'] as String?,
       nextDueDate: json['next_due_date'] as String?,
+      nextDueKm: _toDoubleNullable(json['next_due_km']),
       intervalDays: _toIntNullable(json['interval_days']),
       intervalKm: _toIntNullable(json['interval_km']),
+      warningBeforeDays: _toIntNullable(json['warning_before_days']),
+      warningBeforeKm: _toIntNullable(json['warning_before_km']),
       kilometrage: _toDoubleNullable(json['kilometrage']),
     );
   }
 
   /// Convert MaintenanceRecord to JSON
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'ambulance_id': ambulanceId,
-        'date': date,
-        'maintenance_type': maintenanceType,
-        'maintenance_description': maintenanceDescription,
-        'price_per_piece': pricePerPiece,
-        'mechanic_name': mechanicName,
-        'notes': notes,
-        'user_id': userId,
-        'driver_name': driverName,
-        'limit_value': limitValue,
-        'limit_unit': limitUnit,
-        'document_path': documentPath,
-        'created_at': createdAt,
-        'updated_at': updatedAt,
-        'next_due_date': nextDueDate,
-        'interval_days': intervalDays,
-        'interval_km': intervalKm,
-        'kilometrage': kilometrage,
-      };
+    'id': id,
+    'ambulance_id': ambulanceId,
+    'date': date,
+    'maintenance_type': maintenanceType,
+    'maintenance_description': maintenanceDescription,
+    'price_per_piece': pricePerPiece,
+    'mechanic_name': mechanicName,
+    'notes': notes,
+    'user_id': userId,
+    'driver_name': driverName,
+    'limit_value': limitValue,
+    'limit_unit': limitUnit,
+    'document_path': documentPath,
+    'created_at': createdAt,
+    'updated_at': updatedAt,
+    'next_due_date': nextDueDate,
+    'next_due_km': nextDueKm,
+    'interval_days': intervalDays,
+    'interval_km': intervalKm,
+    'warning_before_days': warningBeforeDays,
+    'warning_before_km': warningBeforeKm,
+    'kilometrage': kilometrage,
+  };
 
   @override
   String toString() =>

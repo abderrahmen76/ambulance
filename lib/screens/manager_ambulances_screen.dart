@@ -1,11 +1,14 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_model.dart';
 import '../models/ambulance_model.dart';
+import '../models/equipment_rental_model.dart';
 import '../models/fuel_card_model.dart';
 import '../models/maintenance_record_model.dart';
 import '../models/mission_model.dart';
 import '../services/ambulance_service.dart';
 import '../services/api_client.dart';
+import '../services/equipment_rental_service.dart';
 import '../services/fuel_card_service.dart';
 import '../services/maintenance_service.dart';
 import '../services/ambulance_report_service.dart';
@@ -14,15 +17,15 @@ import '../config/constants.dart';
 import '../utils/responsive.dart';
 import './add_maintenance_screen.dart';
 import './add_fuel_card_screen.dart';
+import './equipment_rental_screen.dart'
+    show AddEquipmentRentalDialog, SellEquipmentDialog, baseEquipmentTypes;
 import './refuel_fuel_card_screen.dart';
 
 class ManagerAmbulancesScreen extends StatefulWidget {
   final User user;
 
-  const ManagerAmbulancesScreen({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerAmbulancesScreen({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerAmbulancesScreen> createState() =>
@@ -51,7 +54,8 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint(
-          '[ManagerAmbulancesScreen] App resumed, reloading ambulances...');
+        '[ManagerAmbulancesScreen] App resumed, reloading ambulances...',
+      );
       _reloadAmbulances();
     }
   }
@@ -84,9 +88,9 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
         children: [
           Text(
             'Gestion des Ambulances',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
           SizedBox(height: responsive.spacingXLarge),
           FutureBuilder<List<Ambulance>>(
@@ -97,9 +101,7 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
               }
 
               if (snapshot.hasError) {
-                return Center(
-                  child: Text('Erreur: ${snapshot.error}'),
-                );
+                return Center(child: Text('Erreur: ${snapshot.error}'));
               }
 
               final ambulances = snapshot.data ?? [];
@@ -155,14 +157,10 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
                           DataCell(
                             const Text(
                               '0',
-                              style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
+                              style: TextStyle(fontWeight: FontWeight.w600),
                             ),
                           ),
-                          DataCell(
-                            const Text('-'),
-                          ),
+                          DataCell(const Text('-')),
                         ],
                       );
                     }).toList(),
@@ -209,10 +207,8 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
 class ManagerAmbulancesScreenContent extends StatefulWidget {
   final User user;
 
-  const ManagerAmbulancesScreenContent({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerAmbulancesScreenContent({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerAmbulancesScreenContent> createState() =>
@@ -220,13 +216,17 @@ class ManagerAmbulancesScreenContent extends StatefulWidget {
 }
 
 class _ManagerAmbulancesScreenContentState
-    extends State<ManagerAmbulancesScreenContent> with WidgetsBindingObserver {
+    extends State<ManagerAmbulancesScreenContent>
+    with WidgetsBindingObserver {
   final _apiClient = ApiClient();
+  final _equipmentRentalService = EquipmentRentalService();
   final _fuelCardService = FuelCardService();
   final _maintenanceService = MaintenanceService();
   final _companyStaffService = CompanyStaffService();
   late Future<List<Ambulance>> _ambulancesFuture;
   Ambulance? _selectedAmbulance;
+  List<String> _equipmentTypes = [...baseEquipmentTypes];
+  List<User> _equipmentCompanyStaff = [];
 
   Future<List<User>> _loadDriverOptions() async {
     final byId = <String, User>{widget.user.id: widget.user};
@@ -242,10 +242,7 @@ class _ManagerAmbulancesScreenContentState
     return byId.values.toList();
   }
 
-  Set<String> _buildSelectedDriverIds(
-    String? driverNames,
-    List<User> options,
-  ) {
+  Set<String> _buildSelectedDriverIds(String? driverNames, List<User> options) {
     final names = (driverNames ?? '')
         .split(',')
         .map((name) => name.trim())
@@ -276,16 +273,53 @@ class _ManagerAmbulancesScreenContentState
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _reloadAmbulances();
+    _loadEquipmentMetadata();
 
-    // 🔥 CRITICAL FIX: Reload after widget is fully built
+    // Critical fix: reload after widget is fully built.
     // This prevents lifecycle event race conditions when widget is recreated
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         debugPrint(
-            '[ManagerAmbulancesScreenContent] Post-frame callback: reloading ambulances');
+          '[ManagerAmbulancesScreenContent] Post-frame callback: reloading ambulances',
+        );
         _reloadAmbulances();
       }
     });
+  }
+
+  Future<void> _loadEquipmentMetadata() async {
+    await Future.wait([_loadEquipmentTypes(), _loadEquipmentCompanyStaff()]);
+  }
+
+  Future<void> _loadEquipmentTypes() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+      if (!mounted) return;
+      setState(() {
+        _equipmentTypes = [
+          ...baseEquipmentTypes,
+          ...customTypes.where((type) => !baseEquipmentTypes.contains(type)),
+        ];
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _loadEquipmentCompanyStaff() async {
+    final tenantId = widget.user.tenantId;
+    if (tenantId == null || tenantId.isEmpty) {
+      return;
+    }
+
+    try {
+      final staff = await _companyStaffService.getCompanyStaff(tenantId);
+      if (!mounted) return;
+      setState(() {
+        _equipmentCompanyStaff = staff
+            .where((member) => member.id != widget.user.id)
+            .toList();
+      });
+    } catch (_) {}
   }
 
   @override
@@ -298,7 +332,8 @@ class _ManagerAmbulancesScreenContentState
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
       debugPrint(
-          '[ManagerAmbulancesScreenContent] App resumed, reloading ambulances...');
+        '[ManagerAmbulancesScreenContent] App resumed, reloading ambulances...',
+      );
       _reloadAmbulances();
     }
   }
@@ -356,10 +391,12 @@ class _ManagerAmbulancesScreenContentState
   }
 
   Future<List<MaintenanceRecord>> _getMaintenanceRecords(
-      String ambulanceId) async {
+    String ambulanceId,
+  ) async {
     try {
       print(
-          '[_getMaintenanceRecords] Fetching records for ambulance: $ambulanceId');
+        '[_getMaintenanceRecords] Fetching records for ambulance: $ambulanceId',
+      );
       final response = await _apiClient.get(
         '${SupabaseConfig.maintenanceRecordsTable}?ambulance_id=eq.$ambulanceId',
       );
@@ -367,16 +404,19 @@ class _ManagerAmbulancesScreenContentState
       for (int i = 0; i < response.length; i++) {
         print('[_getMaintenanceRecords] Record $i: ${response[i]}');
         print(
-            '[_getMaintenanceRecords] Record $i price_per_piece: "${response[i]['price_per_piece']}" (type: ${response[i]['price_per_piece'].runtimeType})');
+          '[_getMaintenanceRecords] Record $i price_per_piece: "${response[i]['price_per_piece']}" (type: ${response[i]['price_per_piece'].runtimeType})',
+        );
       }
 
-      final records =
-          response.map((json) => MaintenanceRecord.fromJson(json)).toList();
+      final records = response
+          .map((json) => MaintenanceRecord.fromJson(json))
+          .toList();
 
       print('[_getMaintenanceRecords] Parsed ${records.length} records');
       for (int i = 0; i < records.length; i++) {
         print(
-            '[_getMaintenanceRecords] Parsed record $i - ID: ${records[i].id}, pricePerPiece: ${records[i].pricePerPiece}');
+          '[_getMaintenanceRecords] Parsed record $i - ID: ${records[i].id}, pricePerPiece: ${records[i].pricePerPiece}',
+        );
       }
       return records;
     } catch (e) {
@@ -387,8 +427,9 @@ class _ManagerAmbulancesScreenContentState
 
   Future<List<MaintenanceRecord>> _getAllMaintenanceRecords() async {
     try {
-      final response =
-          await _apiClient.get(SupabaseConfig.maintenanceRecordsTable);
+      final response = await _apiClient.get(
+        SupabaseConfig.maintenanceRecordsTable,
+      );
       return response.map((json) => MaintenanceRecord.fromJson(json)).toList();
     } catch (e) {
       print('Error loading all maintenance records: $e');
@@ -467,7 +508,10 @@ class _ManagerAmbulancesScreenContentState
                           children: [
                             // Fleet Stats Header
                             _buildFleetStats(
-                                ambulances, todaysMaintenance, activeMissions),
+                              ambulances,
+                              todaysMaintenance,
+                              activeMissions,
+                            ),
                             const SizedBox(height: 24),
 
                             // Active Units Section
@@ -485,12 +529,14 @@ class _ManagerAmbulancesScreenContentState
                             if (ambulances.isEmpty)
                               Center(
                                 child: Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 32),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 32,
+                                  ),
                                   child: Text(
                                     'Aucune ambulance disponible',
-                                    style:
-                                        Theme.of(context).textTheme.bodyMedium,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.bodyMedium,
                                   ),
                                 ),
                               )
@@ -508,49 +554,59 @@ class _ManagerAmbulancesScreenContentState
                                     final statusColor = isInDuty
                                         ? const Color(0xFF10B981)
                                         : const Color(0xFFA3E635);
-                                    final statusText =
-                                        isInDuty ? 'EN SERVICE' : 'DISPONIBLE';
+                                    final statusText = isInDuty
+                                        ? 'EN SERVICE'
+                                        : 'DISPONIBLE';
 
                                     // Filter ALL missions (completed + active) for this ambulance (all time)
                                     final ambulanceMissionsTotal = allMissions
-                                        .where((m) =>
-                                            m.ambulanceId == ambulance.id &&
-                                            m.ambulanceId.isNotEmpty)
+                                        .where(
+                                          (m) =>
+                                              m.ambulanceId == ambulance.id &&
+                                              m.ambulanceId.isNotEmpty,
+                                        )
                                         .toList();
 
                                     final completedMissionsTotal =
                                         ambulanceMissionsTotal
                                             .where(
-                                                (m) => m.status == 'completed')
+                                              (m) => m.status == 'completed',
+                                            )
                                             .length;
                                     final totalMissionsCount =
                                         ambulanceMissionsTotal.length;
 
                                     return GestureDetector(
                                       onTap: () => setState(
-                                          () => _selectedAmbulance = ambulance),
+                                        () => _selectedAmbulance = ambulance,
+                                      ),
                                       child: Container(
-                                        margin:
-                                            const EdgeInsets.only(bottom: 16),
+                                        margin: const EdgeInsets.only(
+                                          bottom: 16,
+                                        ),
                                         padding: const EdgeInsets.all(16),
                                         decoration: BoxDecoration(
                                           color: Colors.white,
-                                          borderRadius:
-                                              BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
                                           border: Border.all(
-                                            color: _selectedAmbulance?.id ==
+                                            color:
+                                                _selectedAmbulance?.id ==
                                                     ambulance.id
                                                 ? AppColors.primary
                                                 : Colors.grey[200]!,
-                                            width: _selectedAmbulance?.id ==
+                                            width:
+                                                _selectedAmbulance?.id ==
                                                     ambulance.id
                                                 ? 2
                                                 : 1,
                                           ),
                                           boxShadow: [
                                             BoxShadow(
-                                              color: Colors.black
-                                                  .withOpacity(0.05),
+                                              color: Colors.black.withOpacity(
+                                                0.05,
+                                              ),
                                               blurRadius: 4,
                                               offset: const Offset(0, 2),
                                             ),
@@ -573,8 +629,9 @@ class _ManagerAmbulancesScreenContentState
                                                       decoration: BoxDecoration(
                                                         color: Colors.grey[200],
                                                         borderRadius:
-                                                            BorderRadius
-                                                                .circular(8),
+                                                            BorderRadius.circular(
+                                                              8,
+                                                            ),
                                                       ),
                                                       child: Icon(
                                                         Icons.local_taxi,
@@ -593,10 +650,11 @@ class _ManagerAmbulancesScreenContentState
                                                               .ambulanceNumber,
                                                           style:
                                                               const TextStyle(
-                                                            fontSize: 16,
-                                                            fontWeight:
-                                                                FontWeight.bold,
-                                                          ),
+                                                                fontSize: 16,
+                                                                fontWeight:
+                                                                    FontWeight
+                                                                        .bold,
+                                                              ),
                                                         ),
                                                         Text(
                                                           'Ford Transit • 2022',
@@ -611,17 +669,18 @@ class _ManagerAmbulancesScreenContentState
                                                   ],
                                                 ),
                                                 Container(
-                                                  padding: const EdgeInsets
-                                                      .symmetric(
-                                                    horizontal: 10,
-                                                    vertical: 5,
-                                                  ),
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 10,
+                                                        vertical: 5,
+                                                      ),
                                                   decoration: BoxDecoration(
                                                     color: statusColor
                                                         .withOpacity(0.15),
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                            4),
+                                                          4,
+                                                        ),
                                                   ),
                                                   child: Text(
                                                     statusText,
@@ -667,21 +726,19 @@ class _ManagerAmbulancesScreenContentState
                                                 ClipRRect(
                                                   borderRadius:
                                                       BorderRadius.circular(4),
-                                                  child:
-                                                      LinearProgressIndicator(
-                                                    value: totalMissionsCount >
-                                                            0
+                                                  child: LinearProgressIndicator(
+                                                    value:
+                                                        totalMissionsCount > 0
                                                         ? completedMissionsTotal /
-                                                            totalMissionsCount
+                                                              totalMissionsCount
                                                         : 0,
                                                     minHeight: 6,
                                                     backgroundColor:
                                                         Colors.grey[200],
                                                     valueColor:
                                                         AlwaysStoppedAnimation<
-                                                            Color>(
-                                                      Colors.green[600]!,
-                                                    ),
+                                                          Color
+                                                        >(Colors.green[600]!),
                                                   ),
                                                 ),
                                               ],
@@ -742,10 +799,14 @@ class _ManagerAmbulancesScreenContentState
     );
   }
 
-  Widget _buildFleetStats(List<Ambulance> ambulances,
-      List<MaintenanceRecord> todaysMaintenance, List<Mission> activeMissions) {
-    final available =
-        ambulances.where((a) => (a.currentMissionId?.isEmpty ?? true)).length;
+  Widget _buildFleetStats(
+    List<Ambulance> ambulances,
+    List<MaintenanceRecord> todaysMaintenance,
+    List<Mission> activeMissions,
+  ) {
+    final available = ambulances
+        .where((a) => (a.currentMissionId?.isEmpty ?? true))
+        .length;
 
     // Count unique ambulances with active missions (ambulance_id not null)
     final inServiceAmbulanceIds = activeMissions
@@ -755,8 +816,10 @@ class _ManagerAmbulancesScreenContentState
     final inService = inServiceAmbulanceIds.length;
 
     // Count unique ambulances that had maintenance added today
-    final uniqueAmbulancesWithMaintenanceToday =
-        todaysMaintenance.map((record) => record.ambulanceId).toSet().length;
+    final uniqueAmbulancesWithMaintenanceToday = todaysMaintenance
+        .map((record) => record.ambulanceId)
+        .toSet()
+        .length;
 
     return Row(
       children: [
@@ -892,7 +955,9 @@ class _ManagerAmbulancesScreenContentState
                     label: const Text('Export PDF'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
                       backgroundColor: Colors.blue[600],
                       foregroundColor: Colors.white,
                     ),
@@ -1005,9 +1070,9 @@ class _ManagerAmbulancesScreenContentState
                   }
 
                   // Sort records by date in descending order (newest first)
-                  final sortedRecords =
-                      List<MaintenanceRecord>.from(maintenanceRecords)
-                        ..sort((a, b) => b.date.compareTo(a.date));
+                  final sortedRecords = List<MaintenanceRecord>.from(
+                    maintenanceRecords,
+                  )..sort((a, b) => b.date.compareTo(a.date));
 
                   return SizedBox(
                     height: 400,
@@ -1022,7 +1087,8 @@ class _ManagerAmbulancesScreenContentState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: sortedRecords.map((record) {
                             final statusColor = _getMaintenanceStatusColor(
-                                record.maintenanceType);
+                              record.maintenanceType,
+                            );
 
                             return Padding(
                               padding: const EdgeInsets.symmetric(vertical: 1),
@@ -1083,8 +1149,9 @@ class _ManagerAmbulancesScreenContentState
                                         ),
                                         decoration: BoxDecoration(
                                           color: statusColor.withOpacity(0.15),
-                                          borderRadius:
-                                              BorderRadius.circular(4),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
                                         ),
                                         child: Text(
                                           record.maintenanceType,
@@ -1111,8 +1178,270 @@ class _ManagerAmbulancesScreenContentState
           ),
         ),
         const SizedBox(height: 20),
+        _buildEquipmentSection(ambulance),
+        const SizedBox(height: 20),
         _buildFuelCardsSection(ambulance),
       ],
+    );
+  }
+
+  Widget _buildEquipmentSection(Ambulance ambulance) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'ÉQUIPEMENTS',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[700],
+                  letterSpacing: 0.5,
+                ),
+              ),
+              Wrap(
+                spacing: 6,
+                children: [
+                  SizedBox(
+                    height: 32,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showAddEquipmentRentalDialog(ambulance),
+                      icon: const Icon(Icons.add, size: 14),
+                      label: const Text(
+                        '+ Ajouter equipement',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        backgroundColor: AppColors.primary,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    height: 32,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _showSellEquipmentDialog(ambulance),
+                      icon: const Icon(Icons.point_of_sale, size: 14),
+                      label: const Text(
+                        'Vendre equipement',
+                        style: TextStyle(fontSize: 11),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        backgroundColor: Colors.green[600],
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<List<EquipmentRental>>(
+            future: _equipmentRentalService.getAmbulanceEquipmentRentals(
+              ambulance.id,
+            ),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const SizedBox(
+                  height: 50,
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+
+              if (snapshot.hasError) {
+                return Text(
+                  'Erreur de chargement des équipements',
+                  style: TextStyle(color: Colors.red[600]),
+                );
+              }
+
+              final rentals = snapshot.data ?? [];
+              if (rentals.isEmpty) {
+                return Text(
+                  'Aucun équipement enregistré',
+                  style: TextStyle(color: Colors.grey[600]),
+                );
+              }
+
+              final sortedRentals = List<EquipmentRental>.from(rentals)
+                ..sort(
+                  (a, b) => (b.createdAt ?? b.rentDate).compareTo(
+                    a.createdAt ?? a.rentDate,
+                  ),
+                );
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: sortedRentals.map((rental) {
+                  final isSale = rental.transactionType == 'sale';
+                  final isReturned = rental.isReturned ?? false;
+                  final chipColor = isSale
+                      ? Colors.green
+                      : isReturned
+                      ? Colors.blue
+                      : Colors.orange;
+                  final chipText = isSale
+                      ? 'Vente'
+                      : isReturned
+                      ? 'Retourné'
+                      : 'Loué';
+
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[200]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      rental.equipmentType,
+                                      style: const TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'Ambulancier: ${rental.ambulancierName}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    Text(
+                                      'Date: ${rental.rentDate.split(' ').first}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    if (!isSale && rental.returnDate != null)
+                                      Text(
+                                        'Retour: ${rental.returnDate!.split(' ').first}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                    Text(
+                                      'Quantité: ${rental.quantity} • ${rental.cost.toStringAsFixed(2)} TND',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[700],
+                                      ),
+                                    ),
+                                    if ((rental.patientName ?? '').isNotEmpty)
+                                      Text(
+                                        'Patient: ${rental.patientName}',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: chipColor.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  chipText,
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: chipColor,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () =>
+                                    _showEditEquipmentDialog(rental),
+                                icon: const Icon(Icons.edit, size: 16),
+                                label: const Text('Modifier'),
+                              ),
+                              if (!isSale && !isReturned)
+                                OutlinedButton.icon(
+                                  onPressed: () =>
+                                      _showReturnEquipmentDialog(rental),
+                                  icon: const Icon(
+                                    Icons.assignment_return,
+                                    size: 16,
+                                  ),
+                                  label: const Text('Retour'),
+                                ),
+                              if (!isSale && rental.returnDate != null)
+                                OutlinedButton.icon(
+                                  onPressed: () =>
+                                      _showEditEquipmentReturnDateDialog(
+                                        rental,
+                                      ),
+                                  icon: const Icon(Icons.event, size: 16),
+                                  label: const Text('Date retour'),
+                                ),
+                              OutlinedButton.icon(
+                                onPressed: () =>
+                                    _showDeleteEquipmentConfirmation(rental),
+                                icon: const Icon(Icons.delete, size: 16),
+                                label: const Text('Supprimer'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.red,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+        ],
+      ),
     );
   }
 
@@ -1147,8 +1476,10 @@ class _ManagerAmbulancesScreenContentState
                     child: ElevatedButton.icon(
                       onPressed: () => _showAddFuelCardDialog(ambulance),
                       icon: const Icon(Icons.add, size: 14),
-                      label:
-                          const Text('Ajouter', style: TextStyle(fontSize: 11)),
+                      label: const Text(
+                        'Ajouter',
+                        style: TextStyle(fontSize: 11),
+                      ),
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -1164,8 +1495,10 @@ class _ManagerAmbulancesScreenContentState
                     child: ElevatedButton.icon(
                       onPressed: () => _showRefuelFuelCardDialog(ambulance),
                       icon: const Icon(Icons.local_gas_station, size: 14),
-                      label: const Text('Recharger',
-                          style: TextStyle(fontSize: 11)),
+                      label: const Text(
+                        'Recharger',
+                        style: TextStyle(fontSize: 11),
+                      ),
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -1391,9 +1724,10 @@ class _ManagerAmbulancesScreenContentState
                 Text(
                   missionCounts[index].toString(),
                   style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.grey[700]),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[700],
+                  ),
                 ),
               ],
             );
@@ -1421,20 +1755,409 @@ class _ManagerAmbulancesScreenContentState
     }
   }
 
+  void _showAddEquipmentRentalDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AddEquipmentRentalDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _equipmentRentalService,
+        equipmentTypes: _equipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: _equipmentCompanyStaff,
+        onRentalAdded: (rental) async {
+          Navigator.pop(dialogContext);
+          await _loadEquipmentTypes();
+          if (!mounted) return;
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${rental.equipmentType} loué avec succès'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showSellEquipmentDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => SellEquipmentDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _equipmentRentalService,
+        equipmentTypes: _equipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: _equipmentCompanyStaff,
+        onEquipmentSold: (sale) async {
+          Navigator.pop(dialogContext);
+          await _loadEquipmentTypes();
+          if (!mounted) return;
+          setState(() {});
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${sale.equipmentType} vendu avec succès'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _pickEquipmentDate(
+    TextEditingController controller, {
+    DateTime? initialDate,
+  }) async {
+    final parsedInitialDate =
+        initialDate ?? DateTime.tryParse(controller.text) ?? DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: parsedInitialDate,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null) {
+      controller.text = picked.toIso8601String().split('T').first;
+    }
+  }
+
+  void _showReturnEquipmentDialog(EquipmentRental rental) {
+    final returnDateCtrl = TextEditingController(
+      text: DateTime.now().toIso8601String().split('T').first,
+    );
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Retourner équipement'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Équipement: ${rental.equipmentType}'),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: returnDateCtrl,
+              readOnly: true,
+              onTap: () => _pickEquipmentDate(returnDateCtrl),
+              decoration: const InputDecoration(
+                labelText: 'Date de retour',
+                border: OutlineInputBorder(),
+                suffixIcon: Icon(Icons.calendar_today),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _equipmentRentalService.markAsReturned(
+                  rental.id,
+                  returnDateCtrl.text,
+                );
+                if (!mounted) return;
+                Navigator.pop(dialogContext);
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Équipement retourné'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erreur: ${e.toString()}')),
+                );
+              }
+            },
+            child: const Text('Confirmer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditEquipmentReturnDateDialog(EquipmentRental rental) {
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ').first ?? '',
+    );
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Modifier date de retour'),
+        content: TextFormField(
+          controller: returnDateCtrl,
+          readOnly: true,
+          onTap: () => _pickEquipmentDate(
+            returnDateCtrl,
+            initialDate: DateTime.tryParse(returnDateCtrl.text),
+          ),
+          decoration: const InputDecoration(
+            labelText: 'Date de retour',
+            border: OutlineInputBorder(),
+            suffixIcon: Icon(Icons.calendar_today),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _equipmentRentalService.updateReturnDate(
+                  rental.id,
+                  returnDateCtrl.text,
+                );
+                if (!mounted) return;
+                Navigator.pop(dialogContext);
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Date de retour mise à jour'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erreur: ${e.toString()}')),
+                );
+              }
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditEquipmentDialog(EquipmentRental rental) {
+    final formKey = GlobalKey<FormState>();
+    final ambulancierCtrl = TextEditingController(text: rental.ambulancierName);
+    final patientNameCtrl = TextEditingController(
+      text: rental.patientName ?? '',
+    );
+    final patientAddressCtrl = TextEditingController(
+      text: rental.patientAddress ?? '',
+    );
+    final patientPhoneCtrl = TextEditingController(
+      text: rental.patientPhoneNumber ?? '',
+    );
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ').first ?? '',
+    );
+    final costCtrl = TextEditingController(
+      text: rental.cost.toStringAsFixed(2),
+    );
+    final notesCtrl = TextEditingController(text: rental.notes ?? '');
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(
+          rental.transactionType == 'sale'
+              ? 'Modifier la vente'
+              : 'Modifier la location',
+        ),
+        content: SingleChildScrollView(
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: ambulancierCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Nom de l\'ambulancier',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      value?.trim().isEmpty ?? true ? 'Requis' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: patientNameCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Nom du patient',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: patientAddressCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Adresse du patient',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: patientPhoneCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Téléphone du patient',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (rental.transactionType != 'sale')
+                  Column(
+                    children: [
+                      TextFormField(
+                        controller: returnDateCtrl,
+                        readOnly: true,
+                        onTap: () => _pickEquipmentDate(
+                          returnDateCtrl,
+                          initialDate: DateTime.tryParse(returnDateCtrl.text),
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Date de retour',
+                          border: OutlineInputBorder(),
+                          suffixIcon: Icon(Icons.calendar_today),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ),
+                TextFormField(
+                  controller: costCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Coût',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      double.tryParse(value ?? '') == null ? 'Invalide' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: notesCtrl,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (!(formKey.currentState?.validate() ?? false)) {
+                return;
+              }
+
+              try {
+                await _equipmentRentalService.updateEquipmentRental(
+                  rentalId: rental.id,
+                  ambulancierName: ambulancierCtrl.text.trim(),
+                  patientName: patientNameCtrl.text.trim(),
+                  patientAddress: patientAddressCtrl.text.trim(),
+                  patientPhoneNumber: patientPhoneCtrl.text.trim(),
+                  returnDate: rental.transactionType == 'sale'
+                      ? null
+                      : returnDateCtrl.text.trim(),
+                  cost: double.parse(costCtrl.text.trim()),
+                  notes: notesCtrl.text.trim(),
+                );
+                if (!mounted) return;
+                Navigator.pop(dialogContext);
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Équipement mis à jour'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erreur: ${e.toString()}')),
+                );
+              }
+            },
+            child: const Text('Enregistrer'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDeleteEquipmentConfirmation(EquipmentRental rental) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirmer la suppression'),
+        content: Text(
+          'Supprimer ${rental.equipmentType} (${rental.transactionType == 'sale' ? 'vente' : 'location'}) ?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _equipmentRentalService.deleteRental(rental.id);
+                if (!mounted) return;
+                Navigator.pop(dialogContext);
+                setState(() {});
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Équipement supprimé'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Erreur: ${e.toString()}')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Supprimer'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showAddMaintenanceDialog(Ambulance ambulance) {
     Navigator.of(context)
         .push(
-      MaterialPageRoute(
-        builder: (context) => AddMaintenanceScreen(
-          user: widget.user,
-          ambulanceId: ambulance.id,
-        ),
-      ),
-    )
+          MaterialPageRoute(
+            builder: (context) => AddMaintenanceScreen(
+              user: widget.user,
+              ambulanceId: ambulance.id,
+              ambulanceName: ambulance.ambulanceNumber,
+            ),
+          ),
+        )
         .then((_) {
-      // Refresh data when user returns from the screen
-      _loadAmbulances();
-    });
+          // Refresh data when user returns from the screen
+          _loadAmbulances();
+        });
   }
 
   void _showMaintenanceDetailsDialog(MaintenanceRecord record) {
@@ -1443,15 +2166,20 @@ class _ManagerAmbulancesScreenContentState
     print('[MaintenanceDetailsDialog] Record ID: ${record.id}');
     print('[MaintenanceDetailsDialog] Record date: ${record.date}');
     print(
-        '[MaintenanceDetailsDialog] Record maintenanceType: ${record.maintenanceType}');
+      '[MaintenanceDetailsDialog] Record maintenanceType: ${record.maintenanceType}',
+    );
     print(
-        '[MaintenanceDetailsDialog] Record mechanicName: ${record.mechanicName}');
+      '[MaintenanceDetailsDialog] Record mechanicName: ${record.mechanicName}',
+    );
     print(
-        '[MaintenanceDetailsDialog] Record pricePerPiece: ${record.pricePerPiece}');
+      '[MaintenanceDetailsDialog] Record pricePerPiece: ${record.pricePerPiece}',
+    );
     print(
-        '[MaintenanceDetailsDialog] Record pricePerPiece type: ${record.pricePerPiece.runtimeType}');
+      '[MaintenanceDetailsDialog] Record pricePerPiece type: ${record.pricePerPiece.runtimeType}',
+    );
     print(
-        '[MaintenanceDetailsDialog] Record pricePerPiece is null: ${record.pricePerPiece == null}');
+      '[MaintenanceDetailsDialog] Record pricePerPiece is null: ${record.pricePerPiece == null}',
+    );
     print('[MaintenanceDetailsDialog] Full record object: $record');
     print('═' * 80);
 
@@ -1479,8 +2207,10 @@ class _ManagerAmbulancesScreenContentState
                     : '-',
               ),
               const SizedBox(height: 12),
-              _buildDetailRow('Notes:',
-                  record.notes?.isEmpty ?? true ? '-' : record.notes!),
+              _buildDetailRow(
+                'Notes:',
+                record.notes?.isEmpty ?? true ? '-' : record.notes!,
+              ),
               const SizedBox(height: 12),
               _buildDetailRow('Chauffeur:', record.driverName ?? '-'),
               const SizedBox(height: 12),
@@ -1493,23 +2223,23 @@ class _ManagerAmbulancesScreenContentState
             ],
           ),
         ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Fermer'),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                _showEditMaintenanceDialog(record);
-              },
-              icon: const Icon(Icons.edit, size: 16),
-              label: const Text('Modifier'),
-            ),
-            ElevatedButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                _showDeleteMaintenanceConfirmation(record);
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Fermer'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _showEditMaintenanceDialog(record);
+            },
+            icon: const Icon(Icons.edit, size: 16),
+            label: const Text('Modifier'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(context);
+              _showDeleteMaintenanceConfirmation(record);
             },
             icon: const Icon(Icons.delete, size: 16),
             label: const Text('Supprimer'),
@@ -1528,17 +2258,22 @@ class _ManagerAmbulancesScreenContentState
     final driverOptionsFuture = _loadDriverOptions();
     final dateController = TextEditingController(text: record.date);
     final typeController = TextEditingController(text: record.maintenanceType);
-    final descriptionController =
-        TextEditingController(text: record.maintenanceDescription);
-    final mechanicController =
-        TextEditingController(text: record.mechanicName ?? '');
-    final priceController =
-        TextEditingController(text: record.pricePerPiece?.toString() ?? '');
+    final descriptionController = TextEditingController(
+      text: record.maintenanceDescription,
+    );
+    final mechanicController = TextEditingController(
+      text: record.mechanicName ?? '',
+    );
+    final priceController = TextEditingController(
+      text: record.pricePerPiece?.toString() ?? '',
+    );
     final notesController = TextEditingController(text: record.notes ?? '');
-    final kilometrageController =
-        TextEditingController(text: record.kilometrage?.toString() ?? '');
-    final driverController =
-        TextEditingController(text: record.driverName ?? '');
+    final kilometrageController = TextEditingController(
+      text: record.kilometrage?.toString() ?? '',
+    );
+    final driverController = TextEditingController(
+      text: record.driverName ?? '',
+    );
     final selectedDriverIds = <String>{};
     var initializedSelection = false;
 
@@ -1698,22 +2433,21 @@ class _ManagerAmbulancesScreenContentState
               onPressed: () {
                 if (formKey.currentState?.validate() ?? false) {
                   Navigator.pop(dialogContext);
-                  _updateMaintenanceRecord(
-                    record.id,
-                    {
-                      'date': dateController.text.trim(),
-                      'maintenance_type': typeController.text.trim(),
-                      'maintenance_description':
-                          descriptionController.text.trim(),
-                      'mechanic_name': mechanicController.text.trim(),
-                      'price_per_piece':
-                          double.tryParse(priceController.text.trim()),
-                      'notes': notesController.text.trim(),
-                      'driver_name': driverController.text.trim(),
-                      'kilometrage':
-                          double.tryParse(kilometrageController.text.trim()),
-                    },
-                  );
+                  _updateMaintenanceRecord(record.id, {
+                    'date': dateController.text.trim(),
+                    'maintenance_type': typeController.text.trim(),
+                    'maintenance_description': descriptionController.text
+                        .trim(),
+                    'mechanic_name': mechanicController.text.trim(),
+                    'price_per_piece': double.tryParse(
+                      priceController.text.trim(),
+                    ),
+                    'notes': notesController.text.trim(),
+                    'driver_name': driverController.text.trim(),
+                    'kilometrage': double.tryParse(
+                      kilometrageController.text.trim(),
+                    ),
+                  });
                 }
               },
               child: const Text('Enregistrer'),
@@ -1742,10 +2476,7 @@ class _ManagerAmbulancesScreenContentState
         Expanded(
           child: Text(
             value,
-            style: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
           ),
         ),
       ],
@@ -1755,37 +2486,38 @@ class _ManagerAmbulancesScreenContentState
   void _showAddFuelCardDialog(Ambulance ambulance) {
     Navigator.of(context)
         .push(
-      MaterialPageRoute(
-        builder: (context) => AddFuelCardScreen(
-          user: widget.user,
-          ambulanceId: ambulance.id,
-        ),
-      ),
-    )
+          MaterialPageRoute(
+            builder: (context) => AddFuelCardScreen(
+              user: widget.user,
+              ambulanceId: ambulance.id,
+              ambulanceName: ambulance.ambulanceNumber,
+            ),
+          ),
+        )
         .then((_) {
-      // Refresh data when user returns from the screen
-      _loadAmbulances();
-    });
+          // Refresh data when user returns from the screen
+          _loadAmbulances();
+        });
   }
 
   void _showRefuelFuelCardDialog(Ambulance ambulance) {
     Navigator.of(context)
         .push(
-      MaterialPageRoute(
-        builder: (context) => RefuelFuelCardScreen(
-          user: widget.user,
-          ambulanceId: ambulance.id,
-          ambulanceData: {
-            'id': ambulance.id,
-            'ambulance_number': ambulance.ambulanceNumber,
-          },
-        ),
-      ),
-    )
+          MaterialPageRoute(
+            builder: (context) => RefuelFuelCardScreen(
+              user: widget.user,
+              ambulanceId: ambulance.id,
+              ambulanceData: {
+                'id': ambulance.id,
+                'ambulance_number': ambulance.ambulanceNumber,
+              },
+            ),
+          ),
+        )
         .then((_) {
-      // Refresh data when user returns from the screen
-      _loadAmbulances();
-    });
+          // Refresh data when user returns from the screen
+          _loadAmbulances();
+        });
   }
 
   void _showFuelCardDetailsDialog(FuelCard card) {
@@ -1829,10 +2561,12 @@ class _ManagerAmbulancesScreenContentState
     final formKey = GlobalKey<FormState>();
     final driverOptionsFuture = _loadDriverOptions();
     final driverNameController = TextEditingController(text: card.driverName);
-    final soldesPaidController =
-        TextEditingController(text: card.soldesPaid.toString());
-    final soldesRestantController =
-        TextEditingController(text: card.soldesRestant.toString());
+    final soldesPaidController = TextEditingController(
+      text: card.soldesPaid.toString(),
+    );
+    final soldesRestantController = TextEditingController(
+      text: card.soldesRestant.toString(),
+    );
     final selectedDriverIds = <String>{};
     var initializedSelection = false;
 
@@ -1968,14 +2702,11 @@ class _ManagerAmbulancesScreenContentState
     double soldesRestant,
   ) async {
     try {
-      await _apiClient.patch(
-        '${SupabaseConfig.fuelCardsTable}?id=eq.$cardId',
-        {
-          'driver_name': driverName,
-          'soldes_paid': soldesPaid,
-          'soldes_restant': soldesRestant,
-        },
-      );
+      await _apiClient.patch('${SupabaseConfig.fuelCardsTable}?id=eq.$cardId', {
+        'driver_name': driverName,
+        'soldes_paid': soldesPaid,
+        'soldes_restant': soldesRestant,
+      });
 
       if (mounted) {
         _loadAmbulances();
@@ -1988,9 +2719,9 @@ class _ManagerAmbulancesScreenContentState
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: ${e.toString()}')));
       }
     }
   }
@@ -2023,9 +2754,9 @@ class _ManagerAmbulancesScreenContentState
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erreur: ${e.toString()}')));
       }
     }
   }
@@ -2045,9 +2776,9 @@ class _ManagerAmbulancesScreenContentState
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erreur: ${e.toString()}')));
       }
     }
   }
@@ -2071,9 +2802,7 @@ class _ManagerAmbulancesScreenContentState
               _deleteFuelCard(card.id);
               _loadAmbulances();
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
           ),
         ],
@@ -2096,9 +2825,9 @@ class _ManagerAmbulancesScreenContentState
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Erreur: ${e.toString()}')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Erreur: ${e.toString()}')));
       }
     }
   }
@@ -2121,9 +2850,7 @@ class _ManagerAmbulancesScreenContentState
               Navigator.pop(dialogContext);
               _deleteMaintenanceRecord(record.id);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
           ),
         ],
@@ -2141,12 +2868,15 @@ class _ManagerAmbulancesScreenContentState
 
   void _showEditAmbulanceDialog(Ambulance ambulance) {
     final formKey = GlobalKey<FormState>();
-    final ambulanceNumberController =
-        TextEditingController(text: ambulance.ambulanceNumber);
-    final telephoneController =
-        TextEditingController(text: ambulance.telephone ?? '');
-    final driverIdController =
-        TextEditingController(text: ambulance.currentDriverId ?? '');
+    final ambulanceNumberController = TextEditingController(
+      text: ambulance.ambulanceNumber,
+    );
+    final telephoneController = TextEditingController(
+      text: ambulance.telephone ?? '',
+    );
+    final driverIdController = TextEditingController(
+      text: ambulance.currentDriverId ?? '',
+    );
 
     showDialog(
       context: context,
@@ -2205,9 +2935,7 @@ class _ManagerAmbulancesScreenContentState
                 );
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
             child: const Text('Enregistrer'),
           ),
         ],
@@ -2222,14 +2950,12 @@ class _ManagerAmbulancesScreenContentState
     String driverId,
   ) async {
     try {
-      await _apiClient.patch(
-        '${SupabaseConfig.ambulancesTable}?id=eq.$ambulanceId',
-        {
-          'ambulance_number': ambulanceNumber,
-          'telephone': telephone,
-          'current_driver_id': driverId.isEmpty ? null : driverId,
-        },
-      );
+      await _apiClient
+          .patch('${SupabaseConfig.ambulancesTable}?id=eq.$ambulanceId', {
+            'ambulance_number': ambulanceNumber,
+            'telephone': telephone,
+            'current_driver_id': driverId.isEmpty ? null : driverId,
+          });
 
       if (mounted) {
         _loadAmbulances();
@@ -2293,10 +3019,13 @@ class _ManagerAmbulancesScreenContentState
       final inService = inServiceAmbulanceIds.length;
       final todaysMaint = maintenanceRecords
           .where(
-              (r) => r.date.startsWith(DateTime.now().toString().split(' ')[0]))
+            (r) => r.date.startsWith(DateTime.now().toString().split(' ')[0]),
+          )
           .toList();
-      final uniqueMaintToday =
-          todaysMaint.map((r) => r.ambulanceId).toSet().length;
+      final uniqueMaintToday = todaysMaint
+          .map((r) => r.ambulanceId)
+          .toSet()
+          .length;
 
       // Close loading dialog
       if (mounted) {
@@ -2319,7 +3048,8 @@ class _ManagerAmbulancesScreenContentState
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Rapport pour ${ambulance.ambulanceNumber} généré avec succès'),
+              'Rapport pour ${ambulance.ambulanceNumber} généré avec succès',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -2355,9 +3085,7 @@ class _ManagerAmbulancesScreenContentState
               Navigator.pop(dialogContext);
               _deleteAmbulanceWrapper(ambulance.id);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
           ),
         ],
@@ -2453,9 +3181,7 @@ class _ManagerAmbulancesScreenContentState
                 );
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
             child: const Text('Ajouter'),
           ),
         ],
@@ -2469,9 +3195,7 @@ class _ManagerAmbulancesScreenContentState
     String driverId,
   ) async {
     try {
-      final body = {
-        'ambulance_number': ambulanceNumber,
-      };
+      final body = {'ambulance_number': ambulanceNumber};
 
       // Only add optional fields if they have values
       if (telephone.isNotEmpty) {
@@ -2481,10 +3205,7 @@ class _ManagerAmbulancesScreenContentState
         body['current_driver_id'] = driverId;
       }
 
-      await _apiClient.post(
-        SupabaseConfig.ambulancesTable,
-        body,
-      );
+      await _apiClient.post(SupabaseConfig.ambulancesTable, body);
 
       if (mounted) {
         _loadAmbulances();

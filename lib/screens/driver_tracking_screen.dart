@@ -38,17 +38,16 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
   final ShiftScheduleService _scheduleService = ShiftScheduleService();
   final ApiClient _apiClient = ApiClient();
 
-  bool _isTracking = false;
   bool _isConnected = false;
   bool _backgroundServiceActive = false;
   bool _isBusy = true;
   String? _error;
   Position? _currentPosition;
   String? _currentPlaceName;
-  int _updateCount = 0;
   DriverShiftSchedule? _activeSchedule;
   DriverShiftSchedule? _nextSchedule;
   List<DriverShiftSchedule> _driverSchedules = [];
+  DateTime _selectedAgendaDate = DateTime.now();
   Timer? _scheduleSyncTimer;
 
   bool get _isScheduleLocked =>
@@ -106,7 +105,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       await _syncScheduledShift();
       _syncTrackingState();
     } catch (error) {
-      setState(() => _error = error.toString());
+      setState(() => _error = _friendlyTrackingError(error));
     } finally {
       if (mounted) {
         setState(() => _isBusy = false);
@@ -128,9 +127,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
 
     final rows = await _apiClient.get(
       SupabaseConfig.ambulancesTable,
-      filters: {
-        'tenant_id': 'eq.$tenantId',
-      },
+      filters: {'tenant_id': 'eq.$tenantId'},
     );
 
     final ambulances = rows
@@ -197,9 +194,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
 
     if (_backgroundServiceActive || autoEnableBackground) {
       final selectedAmbulance = _tenantAmbulances.cast<Ambulance?>().firstWhere(
-            (item) => item?.id == ambulanceId,
-            orElse: () => null,
-          );
+        (item) => item?.id == ambulanceId,
+        orElse: () => null,
+      );
       await BackgroundLocationService.initializeService();
       await BackgroundLocationService.startBackgroundService(
         driverId: widget.user.id,
@@ -278,7 +275,8 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             );
           }
         }
-      } else if (activeShift != null && activeShift.shiftSource == 'scheduled') {
+      } else if (activeShift != null &&
+          activeShift.shiftSource == 'scheduled') {
         await _presenceService.endShift(userId: widget.user.id);
         await _trackingService.stopTracking();
         if (_backgroundServiceActive) {
@@ -288,13 +286,23 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       }
 
       if (mounted) {
-        setState(() {});
+        setState(() => _error = null);
       }
       _syncTrackingState();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = 'Schedule sync failed: $error');
+      setState(() => _error = _friendlyTrackingError(error));
     }
+  }
+
+  String _friendlyTrackingError(Object error) {
+    final message = error.toString();
+    if (message.contains('one_active_shift_per_device') ||
+        message.contains('duplicate key value') ||
+        message.contains('23505')) {
+      return 'Votre service est déjà actif sur cet appareil. Actualisez la page ou terminez le service en cours avant d’en démarrer un autre.';
+    }
+    return 'Impossible de synchroniser votre planning pour le moment. Vérifiez votre connexion puis réessayez.';
   }
 
   void _startScheduleSyncTimer() {
@@ -325,9 +333,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
   void _syncTrackingState() {
     if (!mounted) return;
     setState(() {
-      _isTracking = _trackingService.isTracking;
       _isConnected = _trackingService.isConnected;
-      _updateCount = _trackingService.updateCount;
     });
   }
 
@@ -336,7 +342,6 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       if (!mounted) return;
       setState(() {
         _currentPosition = position;
-        _updateCount = _trackingService.updateCount;
       });
       _getPlaceName(position.latitude, position.longitude);
     });
@@ -377,9 +382,11 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       if (placemarks.isEmpty || !mounted) return;
 
       final place = placemarks.first;
-      final label = [place.street, place.locality, place.country]
-          .where((value) => value != null && value.isNotEmpty)
-          .join(', ');
+      final label = [
+        place.street,
+        place.locality,
+        place.country,
+      ].where((value) => value != null && value.isNotEmpty).join(', ');
       setState(() {
         _currentPlaceName = label.isEmpty ? null : label;
       });
@@ -438,7 +445,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         _showSnack('Shift started.', Colors.green);
       }
     } catch (error) {
-      _showSnack('Unable to start shift: $error', Colors.red);
+      _showSnack(_friendlyTrackingError(error), Colors.red);
     } finally {
       if (mounted) {
         setState(() => _isBusy = false);
@@ -457,7 +464,10 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       _syncTrackingState();
       _showSnack('Shift ended and tracking released.', Colors.orange);
     } catch (error) {
-      _showSnack('Unable to end shift: $error', Colors.red);
+      _showSnack(
+        'Impossible de terminer votre service pour le moment. Réessayez dans quelques instants.',
+        Colors.red,
+      );
     } finally {
       if (mounted) {
         setState(() => _isBusy = false);
@@ -492,8 +502,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       );
 
       if (!result.granted && result.conflictingClaim != null) {
-        final shouldTakeOver =
-            await _showTakeoverDialog(result.conflictingClaim!);
+        final shouldTakeOver = await _showTakeoverDialog(
+          result.conflictingClaim!,
+        );
         if (shouldTakeOver == true) {
           if (!mounted) return;
           setState(() => _isBusy = false);
@@ -556,19 +567,19 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
 
     await BackgroundLocationService.initializeService();
     await BackgroundLocationService.startBackgroundService(
-        driverId: widget.user.id,
-        ambulanceId: _presenceService.activeClaim!.ambulanceId,
-        driverName: widget.user.name,
-        backendUrl: _backendUrl,
-        ambulanceNumber: _presenceService.activeClaim!.ambulanceNumber,
-        ambulanceTelephone: _tenantAmbulances
-            .cast<Ambulance?>()
-            .firstWhere(
-              (item) => item?.id == _presenceService.activeClaim!.ambulanceId,
-              orElse: () => null,
-            )
-            ?.telephone,
-      );
+      driverId: widget.user.id,
+      ambulanceId: _presenceService.activeClaim!.ambulanceId,
+      driverName: widget.user.name,
+      backendUrl: _backendUrl,
+      ambulanceNumber: _presenceService.activeClaim!.ambulanceNumber,
+      ambulanceTelephone: _tenantAmbulances
+          .cast<Ambulance?>()
+          .firstWhere(
+            (item) => item?.id == _presenceService.activeClaim!.ambulanceId,
+            orElse: () => null,
+          )
+          ?.telephone,
+    );
     if (mounted) {
       setState(() => _backgroundServiceActive = true);
     }
@@ -600,30 +611,15 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
 
   void _showSnack(String message, Color color) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: color,
-      ),
-    );
-  }
-
-  Ambulance? _findAmbulance(String? ambulanceId) {
-    for (final ambulance in _tenantAmbulances) {
-      if (ambulance.id == ambulanceId) {
-        return ambulance;
-      }
-    }
-    return null;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), backgroundColor: color));
   }
 
   @override
   Widget build(BuildContext context) {
     final activeShift = _presenceService.activeShift;
     final activeClaim = _presenceService.activeClaim;
-    final currentAmbulance = _findAmbulance(
-      activeClaim?.ambulanceId ?? _selectedAmbulanceId,
-    );
 
     if (_isBusy) {
       return const Center(
@@ -638,20 +634,18 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         children: [
           Text(
             'Shift & Tracking',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
           _buildOverviewCard(activeShift, activeClaim),
           const SizedBox(height: 16),
-          _buildLinkedAmbulanceCard(currentAmbulance, activeClaim),
+          _buildDriverAgendaCard(),
           const SizedBox(height: 16),
           if (_currentPosition != null) _buildLocationCard(),
           if (_currentPosition != null) const SizedBox(height: 16),
           if (_error != null) _buildErrorCard(),
-          if (_error != null) const SizedBox(height: 16),
-          _buildStatisticsCard(),
         ],
       ),
     );
@@ -662,7 +656,8 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
     TrackingClaim? activeClaim,
   ) {
     final shiftStarted = activeShift?.startedAt.toLocal();
-    final lastBeat = activeClaim?.lastHeartbeatAt.toLocal() ??
+    final lastBeat =
+        activeClaim?.lastHeartbeatAt.toLocal() ??
         activeShift?.lastHeartbeatAt.toLocal();
 
     return Container(
@@ -697,9 +692,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             activeClaim != null
                 ? 'Primary tracker: ${activeClaim.ambulanceNumber}'
                 : 'No ambulance claimed yet',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 6),
           Text(
@@ -708,7 +703,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                 : 'Manager schedules can start this shift automatically when the planned time begins.',
             style: TextStyle(color: Colors.grey.shade700),
           ),
-          if (activeShift == null && _activeSchedule == null && _nextSchedule != null) ...[
+          if (activeShift == null &&
+              _activeSchedule == null &&
+              _nextSchedule != null) ...[
             const SizedBox(height: 8),
             Text(
               'Next schedule: ${_nextScheduleLabel()!}',
@@ -743,10 +740,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             const SizedBox(height: 8),
             Text(
               'Tracking is managed automatically while this schedule is active.',
-              style: TextStyle(
-                color: Colors.grey.shade700,
-                fontSize: 12,
-              ),
+              style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
             ),
           ],
           if (lastBeat != null) ...[
@@ -761,34 +755,32 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             children: [
               Expanded(
                 child: ElevatedButton.icon(
-                  onPressed:
-                      _driverSchedules.isNotEmpty
-                          ? () async {
-                              await _syncScheduledShift();
-                              if (!mounted) return;
-                              if (_activeSchedule == null) {
-                                final nextLabel = _nextScheduleLabel();
-                                _showSnack(
-                                  nextLabel == null
-                                      ? 'No active shift right now.'
-                                      : 'No active shift right now. $nextLabel.',
-                                  Colors.orange,
-                                );
-                              } else {
-                                _showSnack(
-                                  'Scheduled shift synced.',
-                                  Colors.green,
-                                );
-                              }
-                            }
-                          : (activeShift == null ? _startShift : null),
+                  onPressed: _driverSchedules.isNotEmpty
+                      ? () async {
+                          await _syncScheduledShift();
+                          if (!mounted) return;
+                          if (_activeSchedule == null) {
+                            final nextLabel = _nextScheduleLabel();
+                            _showSnack(
+                              nextLabel == null
+                                  ? 'No active shift right now.'
+                                  : 'No active shift right now. $nextLabel.',
+                              Colors.orange,
+                            );
+                          } else {
+                            _showSnack('Scheduled shift synced.', Colors.green);
+                          }
+                        }
+                      : (activeShift == null ? _startShift : null),
                   icon: Icon(
                     _driverSchedules.isNotEmpty
                         ? Icons.sync
                         : Icons.play_circle_fill,
                   ),
                   label: Text(
-                    _driverSchedules.isNotEmpty ? 'Sync Schedule' : 'Start Shift',
+                    _driverSchedules.isNotEmpty
+                        ? 'Sync Schedule'
+                        : 'Start Shift',
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
@@ -819,10 +811,16 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
     );
   }
 
-  Widget _buildLinkedAmbulanceCard(
-    Ambulance? currentAmbulance,
-    TrackingClaim? activeClaim,
-  ) {
+  Widget _buildDriverAgendaCard() {
+    final selectedSchedules = _scheduleService.schedulesForDate(
+      _driverSchedules,
+      _selectedAgendaDate,
+    );
+    final visibleDays = List.generate(
+      7,
+      (index) => _selectedAgendaDate.add(Duration(days: index - 3)),
+    );
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -833,67 +831,223 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Linked ambulance',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(14),
                 ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Live GPS is sent for the ambulance currently linked to this driver account.',
-            style: TextStyle(color: Colors.grey.shade700),
+                child: const Icon(
+                  Icons.calendar_month,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Mon agenda',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Vos services planifiés par le manager',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Actualiser',
+                onPressed: () async {
+                  await _loadDriverSchedules();
+                  if (!mounted) return;
+                  setState(() {});
+                },
+                icon: const Icon(Icons.refresh, color: AppColors.primary),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
-          if (currentAmbulance != null)
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF7FAFC),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    currentAmbulance.ambulanceNumber,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 16,
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: visibleDays.map((day) {
+                final selected = _isSameDay(day, _selectedAgendaDate);
+                final hasShift = _scheduleService
+                    .schedulesForDate(_driverSchedules, day)
+                    .isNotEmpty;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => setState(() => _selectedAgendaDate = day),
+                    child: Container(
+                      width: 64,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? AppColors.primary
+                            : const Color(0xFFF7FAFC),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: selected
+                              ? AppColors.primary
+                              : Colors.grey.shade200,
+                        ),
+                      ),
+                      child: Column(
+                        children: [
+                          Text(
+                            _weekdayShort(day.weekday),
+                            style: TextStyle(
+                              color: selected
+                                  ? Colors.white
+                                  : Colors.grey.shade700,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${day.day}',
+                            style: TextStyle(
+                              color: selected ? Colors.white : Colors.black87,
+                              fontSize: 18,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: hasShift
+                                  ? (selected
+                                        ? Colors.white
+                                        : AppColors.primary)
+                                  : Colors.transparent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Phone: ${currentAmbulance.telephone ?? 'N/A'}',
-                    style: TextStyle(color: Colors.grey.shade700),
-                  ),
-                  Text(
-                    activeClaim != null
-                        ? 'Tracking is currently active for this ambulance.'
-                        : 'This ambulance will be tracked automatically when the shift starts.',
-                    style: TextStyle(color: Colors.grey.shade700),
-                  ),
-                ],
-              ),
-            )
-          else
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.orange.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.orange.shade100),
-              ),
-              child: const Text(
-                'No ambulance is linked to this driver account yet. Go back and link or switch the ambulance from the dashboard first.',
-              ),
+                );
+              }).toList(),
             ),
-          const SizedBox(height: 12),
+          ),
+          const SizedBox(height: 16),
           Text(
-            'To change ambulance, first liberate the current ambulance from the dashboard, then choose another one there.',
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 12,
+            _formatAgendaDate(_selectedAgendaDate),
+            style: const TextStyle(
+              color: Color(0xFF24324A),
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (selectedSchedules.isEmpty)
+            _buildAgendaEmptyState()
+          else
+            ...selectedSchedules.map(_buildAgendaShiftTile),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAgendaEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF7FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Text(
+        'Aucun service planifié pour cette journée.',
+        style: TextStyle(color: Colors.grey.shade700),
+      ),
+    );
+  }
+
+  Widget _buildAgendaShiftTile(DriverShiftSchedule schedule) {
+    final isActive = schedule.isActiveAt(DateTime.now());
+    final color = _scheduleColor(schedule);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isActive ? color : color.withValues(alpha: 0.18),
+          width: isActive ? 1.4 : 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.access_time, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  schedule.shiftLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF24324A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  schedule.timeRangeLabel,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: isActive
+                  ? Colors.green.withValues(alpha: 0.12)
+                  : Colors.white,
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              isActive ? 'En cours' : _recurrenceLabel(schedule),
+              style: TextStyle(
+                color: isActive ? Colors.green.shade700 : Colors.grey.shade700,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ],
@@ -901,9 +1055,90 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
     );
   }
 
+  bool _isSameDay(DateTime first, DateTime second) {
+    return first.year == second.year &&
+        first.month == second.month &&
+        first.day == second.day;
+  }
+
+  String _weekdayShort(int weekday) {
+    switch (weekday) {
+      case DateTime.monday:
+        return 'Lun';
+      case DateTime.tuesday:
+        return 'Mar';
+      case DateTime.wednesday:
+        return 'Mer';
+      case DateTime.thursday:
+        return 'Jeu';
+      case DateTime.friday:
+        return 'Ven';
+      case DateTime.saturday:
+        return 'Sam';
+      default:
+        return 'Dim';
+    }
+  }
+
+  String _formatAgendaDate(DateTime date) {
+    const months = [
+      'janvier',
+      'février',
+      'mars',
+      'avril',
+      'mai',
+      'juin',
+      'juillet',
+      'août',
+      'septembre',
+      'octobre',
+      'novembre',
+      'décembre',
+    ];
+    return '${_weekdayLong(date.weekday)} ${date.day} ${months[date.month - 1]}';
+  }
+
+  String _weekdayLong(int weekday) {
+    switch (weekday) {
+      case DateTime.monday:
+        return 'Lundi';
+      case DateTime.tuesday:
+        return 'Mardi';
+      case DateTime.wednesday:
+        return 'Mercredi';
+      case DateTime.thursday:
+        return 'Jeudi';
+      case DateTime.friday:
+        return 'Vendredi';
+      case DateTime.saturday:
+        return 'Samedi';
+      default:
+        return 'Dimanche';
+    }
+  }
+
+  String _recurrenceLabel(DriverShiftSchedule schedule) {
+    if (schedule.recurrenceType == ShiftRecurrence.weekly) {
+      return 'Hebdo';
+    }
+    return 'Quotidien';
+  }
+
+  Color _scheduleColor(DriverShiftSchedule schedule) {
+    final label = schedule.shiftLabel.toLowerCase();
+    if (label.contains('night') || label.contains('nuit')) {
+      return const Color(0xFF41295A);
+    }
+    if (label.contains('evening') || label.contains('soir')) {
+      return const Color(0xFFE27D60);
+    }
+    return AppColors.primary;
+  }
+
   Widget _buildLocationCard() {
     final position = _currentPosition!;
-    final displayLocation = _currentPlaceName ??
+    final displayLocation =
+        _currentPlaceName ??
         '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
 
     return Container(
@@ -940,46 +1175,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.red.shade100),
       ),
-      child: Text(
-        _error!,
-        style: TextStyle(color: Colors.red.shade800),
-      ),
-    );
-  }
-
-  Widget _buildStatisticsCard() {
-    final deviceClaim = _presenceService.activeClaim;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey.shade200),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Tracker stats',
-            style: TextStyle(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildStatItem('Updates', '$_updateCount'),
-              _buildStatItem(
-                'Claim',
-                deviceClaim?.ambulanceNumber ?? 'None',
-              ),
-              _buildStatItem(
-                'Status',
-                _isTracking ? 'Live' : 'Idle',
-              ),
-            ],
-          ),
-        ],
-      ),
+      child: Text(_error!, style: TextStyle(color: Colors.red.shade800)),
     );
   }
 
@@ -1000,25 +1196,6 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
           ),
         ),
       ),
-    );
-  }
-
-  Widget _buildStatItem(String label, String value) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            fontWeight: FontWeight.w700,
-            fontSize: 16,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-        ),
-      ],
     );
   }
 }

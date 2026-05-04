@@ -192,7 +192,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       print(
-          '📧 [LOGIN] Attempting login with email: ${_emailController.text.trim()}');
+        '📧 [LOGIN] Attempting login with email: ${_emailController.text.trim()}',
+      );
 
       // Call authentication service
       // This will: 1. Authenticate with Supabase Auth
@@ -206,9 +207,11 @@ class _LoginScreenState extends State<LoginScreen> {
       // ⚠️ CRITICAL: Validate user object before proceeding
       // This ensures the UUID was properly returned from the database
       if (!_validateUserObject(user)) {
-        throw Exception('User data validation failed. '
-            'Missing required fields: id, name, email, or role. '
-            'This may indicate a database schema or RLS policy issue.');
+        throw Exception(
+          'User data validation failed. '
+          'Missing required fields: id, name, email, or role. '
+          'This may indicate a database schema or RLS policy issue.',
+        );
       }
 
       stopwatch.stop();
@@ -228,30 +231,26 @@ class _LoginScreenState extends State<LoginScreen> {
 
         if (user.role == 'admin') {
           print('📊 [NAVIGATION] Navigating to admin dashboard...');
-          Navigator.of(context).pushReplacementNamed(
-            '/dashboard',
-            arguments: user,
-          );
+          Navigator.of(
+            context,
+          ).pushReplacementNamed('/dashboard', arguments: user);
         } else if (user.role == 'manager') {
           print('📊 [NAVIGATION] Navigating to manager dashboard...');
-          Navigator.of(context).pushReplacementNamed(
-            '/manager-dashboard',
-            arguments: user,
-          );
+          Navigator.of(
+            context,
+          ).pushReplacementNamed('/manager-dashboard', arguments: user);
         } else if (user.role == 'driver') {
           print('📊 [NAVIGATION] Navigating to driver dashboard...');
-          Navigator.of(context).pushReplacementNamed(
-            '/dashboard',
-            arguments: user,
-          );
+          Navigator.of(
+            context,
+          ).pushReplacementNamed('/dashboard', arguments: user);
         } else {
           // Unknown role - default to driver (lowest access level)
           print('⚠️  [NAVIGATION] Unknown role: ${user.role}');
           print('📊 [NAVIGATION] Navigating to driver dashboard (default)...');
-          Navigator.of(context).pushReplacementNamed(
-            '/dashboard',
-            arguments: user,
-          );
+          Navigator.of(
+            context,
+          ).pushReplacementNamed('/dashboard', arguments: user);
         }
         print('✅ [NAVIGATION] Navigation complete');
       }
@@ -281,49 +280,53 @@ class _LoginScreenState extends State<LoginScreen> {
             children: [
               const SizedBox(height: 40),
 
-              /// Logo Container - Red icon placeholder
+              /// Brand logo
               Container(
-                width: 120,
-                height: 120,
+                width: 160,
+                height: 160,
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppColors.primary,
+                  color: Colors.white,
                   borderRadius: BorderRadius.circular(
-                      context.responsive.radiusXLarge.topLeft.x),
+                    context.responsive.radiusXLarge.topLeft.x,
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primary.withOpacity(0.3),
-                      blurRadius: 20,
-                      offset: const Offset(0, 8),
+                      color: AppColors.primary.withOpacity(0.16),
+                      blurRadius: 24,
+                      offset: const Offset(0, 10),
                     ),
                   ],
                 ),
-                child: const Icon(
-                  Icons.local_hospital,
-                  color: Colors.white,
-                  size: 64,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(18),
+                  child: Image.asset(
+                    'assets/images/ambulink_logo.png',
+                    fit: BoxFit.contain,
+                  ),
                 ),
               ),
 
               const SizedBox(height: 32),
 
               /// App Title
-              Text(
-                'Ambulance Bedoui',
-                style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                textAlign: TextAlign.center,
-              ),
+              // Text(
+              //   'AmbuLink',
+              //   style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+              //         color: AppColors.primary,
+              //         fontWeight: FontWeight.bold,
+              //       ),
+              //   textAlign: TextAlign.center,
+              // ),
 
               const SizedBox(height: 8),
 
               /// Subtitle
               Text(
                 'Portail de Connexion',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                      color: AppColors.textSecondary,
-                    ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: AppColors.textSecondary),
                 textAlign: TextAlign.center,
               ),
 
@@ -353,15 +356,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppColors.border,
-                        ),
+                        borderSide: const BorderSide(color: AppColors.border),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppColors.border,
-                        ),
+                        borderSide: const BorderSide(color: AppColors.border),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -417,15 +416,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppColors.border,
-                        ),
+                        borderSide: const BorderSide(color: AppColors.border),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(
-                          color: AppColors.border,
-                        ),
+                        borderSide: const BorderSide(color: AppColors.border),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
@@ -453,9 +448,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   decoration: BoxDecoration(
                     color: AppColors.error.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: AppColors.error.withOpacity(0.3),
-                    ),
+                    border: Border.all(color: AppColors.error.withOpacity(0.3)),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -539,8 +532,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           height: 24,
                           child: CircularProgressIndicator(
                             strokeWidth: 3,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
                           ),
                         )
                       : Text(
@@ -572,7 +566,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
               /// Footer
               Text(
-                'Created by Abderrahmen Zouari - Hazem Jarboui',
+                'Created by AmbuLink',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: AppColors.textSecondary,
                       fontStyle: FontStyle.italic,

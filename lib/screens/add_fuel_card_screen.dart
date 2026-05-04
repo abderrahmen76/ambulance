@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config/constants.dart';
 import '../models/user_model.dart';
+import '../services/api_client.dart';
 import '../services/company_staff_service.dart';
 import '../services/fuel_card_service.dart';
 import '../utils/responsive.dart';
@@ -9,11 +10,13 @@ import '../utils/responsive.dart';
 class AddFuelCardScreen extends StatefulWidget {
   final User user;
   final String ambulanceId;
+  final String? ambulanceName;
 
   const AddFuelCardScreen({
     Key? key,
     required this.user,
     required this.ambulanceId,
+    this.ambulanceName,
   }) : super(key: key);
 
   @override
@@ -30,8 +33,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
   final _formKey = GlobalKey<FormState>();
   final FuelCardService _fuelCardService = FuelCardService();
   final CompanyStaffService _companyStaffService = CompanyStaffService();
+  final ApiClient _apiClient = ApiClient();
   bool _isLoading = false;
   double _currentBalance = 0.0;
+  late String _ambulanceDisplayName;
   List<User> _companyStaff = [];
   final Set<String> _selectedTeammateIds = {};
 
@@ -45,9 +50,27 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
     _soldesPaidController = TextEditingController();
     _notesController = TextEditingController();
     _kilometrageController = TextEditingController();
+    _ambulanceDisplayName = widget.ambulanceName ?? widget.ambulanceId;
+    _loadAmbulanceDisplayName();
     _loadCurrentBalance();
     _loadCompanyStaff();
     print('[AddFuelCard] Form initialized');
+  }
+
+  Future<void> _loadAmbulanceDisplayName() async {
+    try {
+      final rows = await _apiClient.get(
+        SupabaseConfig.ambulancesTable,
+        filters: {'id': 'eq.${widget.ambulanceId}'},
+      );
+      if (!mounted || rows.isEmpty) return;
+      final number = (rows.first['ambulance_number'] ?? '').toString().trim();
+      if (number.isNotEmpty) {
+        setState(() => _ambulanceDisplayName = number);
+      }
+    } catch (e) {
+      print('[AddFuelCard] Error loading ambulance name: $e');
+    }
   }
 
   Future<void> _loadCompanyStaff() async {
@@ -60,7 +83,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
       final staff = await _companyStaffService.getCompanyStaff(tenantId);
       if (!mounted) return;
       setState(() {
-        _companyStaff = staff.where((member) => member.id != widget.user.id).toList();
+        _companyStaff = staff
+            .where((member) => member.id != widget.user.id)
+            .toList();
       });
       _updateDriverField();
     } catch (e) {
@@ -91,8 +116,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
   Future<void> _loadCurrentBalance() async {
     try {
       print('[AddFuelCard] Loading current balance...');
-      final balance =
-          await _fuelCardService.getCurrentCardBalance(widget.ambulanceId);
+      final balance = await _fuelCardService.getCurrentCardBalance(
+        widget.ambulanceId,
+      );
       setState(() {
         _currentBalance = balance;
       });
@@ -157,7 +183,8 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
         print('[AddFuelCard] - Date: ${fuelData['date']}');
         print('[AddFuelCard] - Driver: ${fuelData['driver_name']}');
         print(
-            '[AddFuelCard] - Soldes Paid (Consumed): ${fuelData['soldes_paid']} TND');
+          '[AddFuelCard] - Soldes Paid (Consumed): ${fuelData['soldes_paid']} TND',
+        );
         print('[AddFuelCard] - Kilometrage: ${fuelData['kilometrage']} km');
         print('[AddFuelCard] - Notes: ${fuelData['notes']}');
 
@@ -220,18 +247,22 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   children: [
                     Text(
                       'Véhicule',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: Colors.grey[600],
-                          ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 4),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          widget.ambulanceId,
-                          style: Theme.of(context).textTheme.headlineSmall,
+                        Expanded(
+                          child: Text(
+                            _ambulanceDisplayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
                         ),
+                        const SizedBox(width: 12),
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -243,9 +274,7 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                           ),
                           child: Text(
                             'EN SERVICE',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
+                            style: Theme.of(context).textTheme.labelSmall
                                 ?.copyWith(
                                   color: AppColors.primary,
                                   fontWeight: FontWeight.w700,
@@ -271,8 +300,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                 onTap: _selectDate,
                 decoration: InputDecoration(
                   hintText: 'dd/mm/yyyy',
-                  suffixIcon:
-                      Icon(Icons.calendar_today, color: AppColors.primary),
+                  suffixIcon: Icon(
+                    Icons.calendar_today,
+                    color: AppColors.primary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -287,8 +318,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print('[AddFuelCard] Date validator - value: "$value"');
@@ -303,11 +336,11 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),
-               TextFormField(
-                  controller: _driverController,
-                  readOnly: true,
-                  decoration: InputDecoration(
-                    hintText: 'Nom du conducteur',
+              TextFormField(
+                controller: _driverController,
+                readOnly: true,
+                decoration: InputDecoration(
+                  hintText: 'Nom du conducteur',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -322,8 +355,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print('[AddFuelCard] Driver validator - value: "$value"');
@@ -381,8 +416,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   if (value?.isEmpty ?? true) {
@@ -412,19 +449,17 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                       children: [
                         Text(
                           'Solde Actuel',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[700],
-                                  ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.grey[700]),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           '${_currentBalance.toStringAsFixed(2)} TND',
-                          style:
-                              Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.green[900],
-                                  ),
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.green[900],
+                              ),
                         ),
                       ],
                     ),
@@ -433,19 +468,17 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                       children: [
                         Text(
                           'Solde Restant',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Colors.grey[700],
-                                  ),
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: Colors.grey[700]),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           '${(_currentBalance - (double.tryParse(_soldesPaidController.text) ?? 0)).toStringAsFixed(2)} TND',
-                          style:
-                              Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.blue[900],
-                                  ),
+                          style: Theme.of(context).textTheme.bodyLarge
+                              ?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.blue[900],
+                              ),
                         ),
                       ],
                     ),
@@ -481,8 +514,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   if (value?.isEmpty ?? true) return null; // Optional field
@@ -519,8 +554,10 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
               ),
               const SizedBox(height: 32),
@@ -558,9 +595,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                       Text(
                         _isLoading ? 'Enregistrement...' : 'Enregistrer',
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
                       ),
                     ],
                   ),
@@ -583,9 +620,9 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   child: Text(
                     'Annuler',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey[700],
-                        ),
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[700],
+                    ),
                   ),
                 ),
               ),

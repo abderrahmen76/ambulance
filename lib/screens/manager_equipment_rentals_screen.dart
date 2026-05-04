@@ -1,24 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/ambulance_model.dart';
 import '../models/equipment_rental_model.dart';
 import '../models/user_model.dart';
 import '../services/equipment_rental_service.dart';
 import '../services/api_client.dart';
 import '../config/constants.dart';
+import './equipment_rental_screen.dart'
+    show AddEquipmentRentalDialog, SellEquipmentDialog;
 
 // Base equipment types
-const List<String> baseEquipmentTypes = [
-  'Oxygéne',
-  'Autre',
-];
+const List<String> baseEquipmentTypes = ['Oxygéne', 'Autre'];
 
 class ManagerEquipmentRentalsScreen extends StatefulWidget {
   final User user;
 
-  const ManagerEquipmentRentalsScreen({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerEquipmentRentalsScreen({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerEquipmentRentalsScreen> createState() =>
@@ -28,11 +26,13 @@ class ManagerEquipmentRentalsScreen extends StatefulWidget {
 class _ManagerEquipmentRentalsScreenState
     extends State<ManagerEquipmentRentalsScreen> {
   late EquipmentRentalService _rentalService;
+  final _apiClient = ApiClient();
   List<EquipmentRental> _allRentals = [];
   bool _isLoading = true;
   List<String> _allEquipmentTypes = [...baseEquipmentTypes];
   String _filterStatus = 'all'; // all, active, returned
   int _totalOxygenBottles = 0; // Total oxygen bottles in inventory
+  Map<String, String> _ambulanceNamesById = {};
 
   @override
   void initState() {
@@ -43,8 +43,124 @@ class _ManagerEquipmentRentalsScreenState
 
   Future<void> _loadData() async {
     await _loadCustomEquipmentTypes();
+    await _getTenantAmbulances();
     await _loadOxygenBottlesInventory();
     await _loadAllRentals();
+  }
+
+  Future<List<Ambulance>> _getTenantAmbulances() async {
+    final response = await _apiClient.get(SupabaseConfig.ambulancesTable);
+    final ambulances = response
+        .map((json) => Ambulance.fromJson(json))
+        .toList();
+    if (mounted) {
+      setState(() {
+        _ambulanceNamesById = {
+          for (final ambulance in ambulances)
+            ambulance.id: ambulance.ambulanceNumber,
+        };
+      });
+    }
+    return ambulances;
+  }
+
+  String _ambulanceLabel(String ambulanceId) =>
+      _ambulanceNamesById[ambulanceId] ?? ambulanceId;
+
+  bool _isSale(EquipmentRental rental) =>
+      rental.transactionType == 'sale' ||
+      (rental.returnDate != null &&
+          rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0]);
+
+  Future<void> _showAmbulancePickerDialog({required bool isSale}) async {
+    try {
+      final ambulances = await _getTenantAmbulances();
+      if (!mounted) return;
+
+      if (ambulances.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Aucune ambulance disponible pour cet équipement'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      showDialog(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text(
+            isSale
+                ? 'Choisir une ambulance pour la vente'
+                : 'Choisir une ambulance',
+          ),
+          children: ambulances
+              .map(
+                (ambulance) => SimpleDialogOption(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    if (isSale) {
+                      _showSellEquipmentDialog(ambulance);
+                    } else {
+                      _showAddEquipmentDialog(ambulance);
+                    }
+                  },
+                  child: Text(ambulance.ambulanceNumber),
+                ),
+              )
+              .toList(),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _showAddEquipmentDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AddEquipmentRentalDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _rentalService,
+        equipmentTypes: _allEquipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: const [],
+        onRentalAdded: (_) async {
+          Navigator.pop(dialogContext);
+          if (!mounted) return;
+          setState(() => _isLoading = true);
+          await _loadData();
+        },
+      ),
+    );
+  }
+
+  void _showSellEquipmentDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => SellEquipmentDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _rentalService,
+        equipmentTypes: _allEquipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: const [],
+        onEquipmentSold: (_) async {
+          Navigator.pop(dialogContext);
+          if (!mounted) return;
+          setState(() => _isLoading = true);
+          await _loadData();
+        },
+      ),
+    );
   }
 
   Future<void> _loadOxygenBottlesInventory() async {
@@ -67,50 +183,35 @@ class _ManagerEquipmentRentalsScreenState
 
   Future<void> _setOxygenBottlesInventory(int quantity) async {
     try {
-      // Get existing inventory record from Supabase
       await _rentalService.setOxygenInventoryCount(quantity);
-      /*
-
-      */
-      /*
       if (mounted) {
-          {
-            'metadata': 'oxygen_inventory',
-            'equipment_type': 'Oxygène (Inventaire)',
-            'ambulance_id': null,
-            'quantity': quantity,
-            'rent_date': DateTime.now().toString().split(' ')[0],
-            'is_returned': true,
-            'cost': 0,
-          },
-        );
-      }
-      */
-
-      if (mounted) {
-        setState(() {
-          _totalOxygenBottles = quantity;
-        });
+        setState(() => _totalOxygenBottles = quantity);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Inventaire défini: $quantity bouteilles d\'oxygène'),
+            content: Text(
+              'Inventaire oxygene mis a jour: $quantity bouteilles',
+            ),
             backgroundColor: Colors.green,
           ),
         );
       }
+      await _loadOxygenBottlesInventory();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur lors de la mise a jour: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   void _showSetInventoryDialog() {
-    final inventoryCtrl =
-        TextEditingController(text: _totalOxygenBottles.toString());
+    final inventoryCtrl = TextEditingController(
+      text: _totalOxygenBottles.toString(),
+    );
 
     showDialog(
       context: context,
@@ -159,10 +260,7 @@ class _ManagerEquipmentRentalsScreenState
       final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
       if (mounted) {
         setState(() {
-          _allEquipmentTypes = [
-            ...baseEquipmentTypes,
-            ...customTypes,
-          ];
+          _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
         });
       }
     } catch (e) {
@@ -177,7 +275,8 @@ class _ManagerEquipmentRentalsScreenState
         setState(() {
           _allRentals = [...rentals];
           _allRentals.sort(
-              (a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+            (a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''),
+          );
           _isLoading = false;
         });
       }
@@ -198,42 +297,38 @@ class _ManagerEquipmentRentalsScreenState
     switch (_filterStatus) {
       case 'active':
         return _allRentals
-            .where((r) =>
-                r.isReturned == false &&
-                !(r.returnDate != null &&
-                    r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0]))
+            .where((r) => r.isReturned == false && !_isSale(r))
             .toList();
       case 'returned':
         return _allRentals
-            .where((r) =>
-                r.isReturned == true &&
-                !(r.returnDate != null &&
-                    r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0]))
+            .where((r) => r.isReturned == true && !_isSale(r))
             .toList();
       case 'sold':
-        return _allRentals
-            .where((r) =>
-                r.returnDate != null &&
-                r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0])
-            .toList();
+        return _allRentals.where((r) => _isSale(r)).toList();
       default:
         return _allRentals;
     }
   }
 
   void _showEditRentalDialog(EquipmentRental rental) {
-    final ambulancierCtrl =
-        TextEditingController(text: rental.ambulancierName ?? '');
-    final patientNameCtrl =
-        TextEditingController(text: rental.patientName ?? '');
-    final patientAddressCtrl =
-        TextEditingController(text: rental.patientAddress ?? '');
-    final patientPhoneCtrl =
-        TextEditingController(text: rental.patientPhoneNumber ?? '');
+    final ambulancierCtrl = TextEditingController(
+      text: rental.ambulancierName ?? '',
+    );
+    final patientNameCtrl = TextEditingController(
+      text: rental.patientName ?? '',
+    );
+    final patientAddressCtrl = TextEditingController(
+      text: rental.patientAddress ?? '',
+    );
+    final patientPhoneCtrl = TextEditingController(
+      text: rental.patientPhoneNumber ?? '',
+    );
     final costCtrl = TextEditingController(text: rental.cost.toString());
     final notesCtrl = TextEditingController(text: rental.notes ?? '');
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
+    final isSold = _isSale(rental);
 
     showDialog(
       context: context,
@@ -245,9 +340,11 @@ class _ManagerEquipmentRentalsScreenState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Ambulance: ${rental.ambulanceId}\nÉquipement: ${rental.equipmentType}',
-                style:
-                    const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                'Ambulance: ${_ambulanceLabel(rental.ambulanceId)}\nÉquipement: ${rental.equipmentType}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 16),
 
@@ -320,8 +417,9 @@ class _ManagerEquipmentRentalsScreenState
               // Cost
               TextFormField(
                 controller: costCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Coût (TND)',
                   border: OutlineInputBorder(
@@ -364,7 +462,7 @@ class _ManagerEquipmentRentalsScreenState
                   patientAddress: patientAddressCtrl.text.isEmpty
                       ? null
                       : patientAddressCtrl.text,
-                  returnDate: returnDateCtrl.text,
+                  returnDate: isSold ? rental.returnDate : returnDateCtrl.text,
                   cost: double.tryParse(costCtrl.text) ?? rental.cost,
                   notes: notesCtrl.text.isEmpty ? null : notesCtrl.text,
                 );
@@ -400,8 +498,9 @@ class _ManagerEquipmentRentalsScreenState
   }
 
   void _showEditReturnDateDialog(EquipmentRental rental) {
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
 
     showDialog(
       context: context,
@@ -412,7 +511,7 @@ class _ManagerEquipmentRentalsScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Ambulance: ${rental.ambulanceId}\nÉquipement: ${rental.equipmentType}',
+              'Ambulance: ${_ambulanceLabel(rental.ambulanceId)}\nÉquipement: ${rental.equipmentType}',
               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
             ),
             const SizedBox(height: 16),
@@ -451,7 +550,9 @@ class _ManagerEquipmentRentalsScreenState
             onPressed: () async {
               try {
                 await _rentalService.updateReturnDate(
-                    rental.id, returnDateCtrl.text);
+                  rental.id,
+                  returnDateCtrl.text,
+                );
 
                 if (mounted) {
                   Navigator.pop(dialogContext);
@@ -514,15 +615,42 @@ class _ManagerEquipmentRentalsScreenState
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAmbulancePickerDialog(isSale: false),
+                  icon: const Icon(Icons.add),
+                  label: const Text('+ Ajouter equipement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAmbulancePickerDialog(isSale: true),
+                  icon: const Icon(Icons.sell),
+                  label: const Text('Vendre equipement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
 
           // Title
           const Text(
             'Équipements en Location',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: 12),
 
@@ -556,8 +684,10 @@ class _ManagerEquipmentRentalsScreenState
               children: [
                 Column(
                   children: [
-                    const Text('Total',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Total',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
                       '${_allRentals.length}',
                       style: const TextStyle(
@@ -570,10 +700,12 @@ class _ManagerEquipmentRentalsScreenState
                 ),
                 Column(
                   children: [
-                    const Text('Actives',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Actives',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
-                      '${_allRentals.where((r) => r.isReturned == false).length}',
+                      '${_allRentals.where((r) => r.isReturned == false && !_isSale(r)).length}',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -584,10 +716,12 @@ class _ManagerEquipmentRentalsScreenState
                 ),
                 Column(
                   children: [
-                    const Text('Retournées',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Retournées',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
-                      '${_allRentals.where((r) => r.isReturned == true).length}',
+                      '${_allRentals.where((r) => r.isReturned == true && !_isSale(r)).length}',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -611,8 +745,11 @@ class _ManagerEquipmentRentalsScreenState
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.medical_services,
-                      size: 64, color: Colors.grey[300]),
+                  Icon(
+                    Icons.medical_services,
+                    size: 64,
+                    color: Colors.grey[300],
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Aucune Location',
@@ -659,8 +796,7 @@ class _ManagerEquipmentRentalsScreenState
 
   Widget _buildRentalCard(EquipmentRental rental) {
     final isReturned = rental.isReturned ?? false;
-    final isSold = rental.returnDate != null &&
-        rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0];
+    final isSold = _isSale(rental);
     final rentDateFormatted = rental.rentDate.split(' ')[0];
     final returnDateFormatted = rental.returnDate?.split(' ')[0] ?? 'N/A';
 
@@ -687,15 +823,26 @@ class _ManagerEquipmentRentalsScreenState
                         ),
                       ),
                       const SizedBox(height: 4),
+                      Text(
+                        'Quantite: ${rental.quantity}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: isSold
                               ? Colors.orange[100]
                               : (isReturned
-                                  ? Colors.grey[200]
-                                  : Colors.green[100]),
+                                    ? Colors.grey[200]
+                                    : Colors.green[100]),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -708,8 +855,8 @@ class _ManagerEquipmentRentalsScreenState
                             color: isSold
                                 ? Colors.orange[700]
                                 : (isReturned
-                                    ? Colors.grey[700]
-                                    : Colors.green[700]),
+                                      ? Colors.grey[700]
+                                      : Colors.green[700]),
                           ),
                         ),
                       ),
@@ -768,7 +915,7 @@ class _ManagerEquipmentRentalsScreenState
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        rental.ambulanceId,
+                        _ambulanceLabel(rental.ambulanceId),
                         style: const TextStyle(fontWeight: FontWeight.w500),
                       ),
                     ],
@@ -826,8 +973,11 @@ class _ManagerEquipmentRentalsScreenState
                     const SizedBox(height: 4),
                     Row(
                       children: [
-                        const Icon(Icons.location_on,
-                            size: 16, color: Colors.redAccent),
+                        const Icon(
+                          Icons.location_on,
+                          size: 16,
+                          color: Colors.redAccent,
+                        ),
                         const SizedBox(width: 4),
                         Expanded(
                           child: Text(
@@ -922,10 +1072,7 @@ class _ManagerEquipmentRentalsScreenState
                   const SizedBox(height: 4),
                   Text(
                     rental.notes!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                   ),
                 ],
               ),
@@ -948,7 +1095,7 @@ class _ManagerEquipmentRentalsScreenState
             const Text('Êtes-vous sûr de vouloir supprimer cette location?'),
             const SizedBox(height: 12),
             Text(
-              'Équipement: ${rental.equipmentType}\nAmbulance: ${rental.ambulanceId}',
+              'Équipement: ${rental.equipmentType}\nAmbulance: ${_ambulanceLabel(rental.ambulanceId)}',
               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
             ),
           ],
@@ -984,9 +1131,7 @@ class _ManagerEquipmentRentalsScreenState
                 );
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
           ),
         ],
@@ -1001,27 +1146,39 @@ class _ManagerEquipmentRentalsScreenState
         .toList();
 
     final totalCost = rentalsOnly.fold<double>(0, (sum, r) => sum + r.cost);
-    final soldCount = rentalsOnly
-        .where((r) => r.transactionType == 'sale')
+    final soldItems = rentalsOnly.where((r) => _isSale(r)).toList();
+    final rentedItems = rentalsOnly
+        .where((r) => !_isSale(r) && r.transactionType == 'rental')
+        .toList();
+    final soldCount = soldItems.fold<int>(0, (sum, r) => sum + r.quantity);
+    final activeCount = rentedItems
+        .where((r) => r.isReturned == false)
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final activeCount = rentalsOnly
-        .where((r) => r.transactionType == 'rental' && r.isReturned == false)
+    final returnedCount = rentedItems
+        .where((r) => r.isReturned == true)
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final returnedCount = rentalsOnly
-        .where((r) => r.transactionType == 'rental' && r.isReturned == true)
-        .fold<int>(0, (sum, r) => sum + r.quantity);
-    final averageCost =
-        rentalsOnly.isNotEmpty ? totalCost / rentalsOnly.length : 0.0;
+
+    double averageCostFor(List<EquipmentRental> items) {
+      final totalQuantity = items.fold<int>(0, (sum, r) => sum + r.quantity);
+      final totalAmount = items.fold<double>(0, (sum, r) => sum + r.cost);
+      return totalQuantity > 0 ? totalAmount / totalQuantity : 0.0;
+    }
+
+    final rentedAverageCost = averageCostFor(rentedItems);
+    final soldAverageCost = averageCostFor(soldItems);
 
     // Calculate oxygen bottles rented and remaining
     final oxygenRented = rentalsOnly
-        .where((r) =>
-            (r.equipmentType.toLowerCase().contains('oxy')) &&
-            r.transactionType == 'rental' &&
-            r.isReturned == false)
+        .where(
+          (r) =>
+              (r.equipmentType.toLowerCase().contains('oxy')) &&
+              r.transactionType == 'rental' &&
+              r.isReturned == false,
+        )
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final oxygenRemaining =
-        _totalOxygenBottles > 0 ? _totalOxygenBottles - oxygenRented : 0;
+    final oxygenRemaining = (_totalOxygenBottles - oxygenRented)
+        .clamp(0, _totalOxygenBottles)
+        .toInt();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1066,7 +1223,7 @@ class _ManagerEquipmentRentalsScreenState
               ),
               _buildPerformanceStat(
                 'Coût Moyen',
-                '${averageCost.toStringAsFixed(2)} TND',
+                'Loc: ${rentedAverageCost.toStringAsFixed(2)} TND\nVendu: ${soldAverageCost.toStringAsFixed(2)} TND',
                 Colors.blue,
                 Icons.trending_up,
               ),
@@ -1148,10 +1305,8 @@ class _ManagerEquipmentRentalsScreenState
 class ManagerEquipmentRentalScreenContent extends StatefulWidget {
   final User user;
 
-  const ManagerEquipmentRentalScreenContent({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerEquipmentRentalScreenContent({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerEquipmentRentalScreenContent> createState() =>
@@ -1168,6 +1323,7 @@ class _ManagerEquipmentRentalScreenContentState
   List<String> _allEquipmentTypes = [...baseEquipmentTypes];
   String _filterStatus = 'all';
   int _totalOxygenBottles = 0;
+  Map<String, String> _ambulanceNamesById = {};
 
   @override
   void initState() {
@@ -1178,7 +1334,8 @@ class _ManagerEquipmentRentalScreenContentState
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       debugPrint(
-          '[ManagerEquipmentRentalScreenContent] Post-frame callback: loading rentals');
+        '[ManagerEquipmentRentalScreenContent] Post-frame callback: loading rentals',
+      );
       _loadData();
     });
   }
@@ -1193,13 +1350,15 @@ class _ManagerEquipmentRentalScreenContentState
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint(
-          '[ManagerEquipmentRentalScreenContent] App resumed, reloading rentals...');
+        '[ManagerEquipmentRentalScreenContent] App resumed, reloading rentals...',
+      );
       _loadData();
     }
   }
 
   Future<void> _loadData() async {
     await _loadCustomEquipmentTypes();
+    await _getTenantAmbulances();
     await _loadAllRentals();
     await _loadOxygenBottlesInventory();
   }
@@ -1210,10 +1369,7 @@ class _ManagerEquipmentRentalScreenContentState
       final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
       if (mounted) {
         setState(() {
-          _allEquipmentTypes = [
-            ...baseEquipmentTypes,
-            ...customTypes,
-          ];
+          _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
         });
       }
     } catch (e) {
@@ -1228,7 +1384,8 @@ class _ManagerEquipmentRentalScreenContentState
         setState(() {
           _allRentals = [...rentals];
           _allRentals.sort(
-              (a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''));
+            (a, b) => (b.createdAt ?? '').compareTo(a.createdAt ?? ''),
+          );
           _isLoading = false;
         });
       }
@@ -1238,6 +1395,121 @@ class _ManagerEquipmentRentalScreenContentState
       }
       debugPrint('Error loading equipment rentals: $e');
     }
+  }
+
+  Future<List<Ambulance>> _getTenantAmbulances() async {
+    final response = await _apiClient.get(SupabaseConfig.ambulancesTable);
+    final ambulances = response
+        .map((json) => Ambulance.fromJson(json))
+        .toList();
+    if (mounted) {
+      setState(() {
+        _ambulanceNamesById = {
+          for (final ambulance in ambulances)
+            ambulance.id: ambulance.ambulanceNumber,
+        };
+      });
+    }
+    return ambulances;
+  }
+
+  String _ambulanceLabel(String ambulanceId) =>
+      _ambulanceNamesById[ambulanceId] ?? ambulanceId;
+
+  bool _isSale(EquipmentRental rental) =>
+      rental.transactionType == 'sale' ||
+      (rental.returnDate != null &&
+          rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0]);
+
+  Future<void> _showAmbulancePickerDialog({required bool isSale}) async {
+    try {
+      final ambulances = await _getTenantAmbulances();
+      if (!mounted) return;
+
+      if (ambulances.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Aucune ambulance disponible pour cet équipement'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      showDialog(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: Text(
+            isSale
+                ? 'Choisir une ambulance pour la vente'
+                : 'Choisir une ambulance',
+          ),
+          children: ambulances
+              .map(
+                (ambulance) => SimpleDialogOption(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    if (isSale) {
+                      _showSellEquipmentDialog(ambulance);
+                    } else {
+                      _showAddEquipmentDialog(ambulance);
+                    }
+                  },
+                  child: Text(ambulance.ambulanceNumber),
+                ),
+              )
+              .toList(),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  void _showAddEquipmentDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AddEquipmentRentalDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _rentalService,
+        equipmentTypes: _allEquipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: const [],
+        onRentalAdded: (_) async {
+          Navigator.pop(dialogContext);
+          if (!mounted) return;
+          setState(() => _isLoading = true);
+          await _loadData();
+        },
+      ),
+    );
+  }
+
+  void _showSellEquipmentDialog(Ambulance ambulance) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => SellEquipmentDialog(
+        ambulanceId: ambulance.id,
+        rentalService: _rentalService,
+        equipmentTypes: _allEquipmentTypes,
+        userId: widget.user.id!,
+        currentUser: widget.user,
+        companyStaff: const [],
+        onEquipmentSold: (_) async {
+          Navigator.pop(dialogContext);
+          if (!mounted) return;
+          setState(() => _isLoading = true);
+          await _loadData();
+        },
+      ),
+    );
   }
 
   Future<void> _loadOxygenBottlesInventory() async {
@@ -1260,58 +1532,35 @@ class _ManagerEquipmentRentalScreenContentState
 
   Future<void> _setOxygenBottlesInventory(int quantity) async {
     try {
-      // Get existing inventory record from Supabase
-      final response = await _apiClient.get(
-        '${SupabaseConfig.equipmentRentalsTable}?metadata=eq.oxygen_inventory',
-      );
-
-      if (response.isNotEmpty) {
-        // Update existing
-        final recordId = response.first['id'];
-        await _apiClient.patch(
-          '${SupabaseConfig.equipmentRentalsTable}?id=eq.$recordId',
-          {'quantity': quantity},
-        );
-      } else {
-        // Create new inventory record
-        await _apiClient.post(
-          SupabaseConfig.equipmentRentalsTable,
-          {
-            'metadata': 'oxygen_inventory',
-            'equipment_type': 'Oxygène (Inventaire)',
-            'ambulance_id': null,
-            'quantity': quantity,
-            'rent_date': DateTime.now().toString().split(' ')[0],
-            'is_returned': true,
-            'cost': 0,
-          },
-        );
-      }
-
+      await _rentalService.setOxygenInventoryCount(quantity);
       if (mounted) {
-        setState(() {
-          _totalOxygenBottles = quantity;
-        });
+        setState(() => _totalOxygenBottles = quantity);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Inventaire défini: $quantity bouteilles d\'oxygène'),
+            content: Text(
+              'Inventaire oxygene mis a jour: $quantity bouteilles',
+            ),
             backgroundColor: Colors.green,
           ),
         );
       }
+      await _loadOxygenBottlesInventory();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Erreur: ${e.toString()}'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Erreur lors de la mise a jour: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
   void _showSetInventoryDialog() {
-    final inventoryCtrl =
-        TextEditingController(text: _totalOxygenBottles.toString());
+    final inventoryCtrl = TextEditingController(
+      text: _totalOxygenBottles.toString(),
+    );
 
     showDialog(
       context: context,
@@ -1358,32 +1607,23 @@ class _ManagerEquipmentRentalScreenContentState
     switch (_filterStatus) {
       case 'active':
         return _allRentals
-            .where((r) =>
-                r.isReturned == false &&
-                !(r.returnDate != null &&
-                    r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0]))
+            .where((r) => r.isReturned == false && !_isSale(r))
             .toList();
       case 'returned':
         return _allRentals
-            .where((r) =>
-                r.isReturned == true &&
-                !(r.returnDate != null &&
-                    r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0]))
+            .where((r) => r.isReturned == true && !_isSale(r))
             .toList();
       case 'sold':
-        return _allRentals
-            .where((r) =>
-                r.returnDate != null &&
-                r.returnDate!.split(' ')[0] == r.rentDate.split(' ')[0])
-            .toList();
+        return _allRentals.where((r) => _isSale(r)).toList();
       default:
         return _allRentals;
     }
   }
 
   void _showEditReturnDateDialog(EquipmentRental rental) {
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
 
     showDialog(
       context: context,
@@ -1394,7 +1634,7 @@ class _ManagerEquipmentRentalScreenContentState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Ambulance: ${rental.ambulanceId}\nÉquipement: ${rental.equipmentType}',
+              'Ambulance: ${_ambulanceLabel(rental.ambulanceId)}\nÉquipement: ${rental.equipmentType}',
               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
             ),
             const SizedBox(height: 16),
@@ -1433,7 +1673,9 @@ class _ManagerEquipmentRentalScreenContentState
             onPressed: () async {
               try {
                 await _rentalService.updateReturnDate(
-                    rental.id, returnDateCtrl.text);
+                  rental.id,
+                  returnDateCtrl.text,
+                );
 
                 if (mounted) {
                   Navigator.pop(dialogContext);
@@ -1468,19 +1710,106 @@ class _ManagerEquipmentRentalScreenContentState
     );
   }
 
+  void _showReturnDialog(EquipmentRental rental) {
+    final returnDateCtrl = TextEditingController(
+      text: DateTime.now().toString().split(' ')[0],
+    );
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Retourner Équipement'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Équipement: ${rental.equipmentType}'),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: returnDateCtrl,
+              readOnly: true,
+              decoration: InputDecoration(
+                labelText: 'Date de Retour',
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                suffixIcon: const Icon(Icons.calendar_today),
+              ),
+              onTap: () async {
+                final picked = await showDatePicker(
+                  context: context,
+                  initialDate: DateTime.now(),
+                  firstDate: DateTime.parse(rental.rentDate.split(' ')[0]),
+                  lastDate: DateTime.now().add(const Duration(days: 365)),
+                );
+                if (picked != null) {
+                  returnDateCtrl.text = picked.toString().split(' ')[0];
+                }
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Annuler'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              try {
+                await _rentalService.markAsReturned(
+                  rental.id,
+                  returnDateCtrl.text,
+                );
+
+                if (mounted) {
+                  Navigator.pop(dialogContext);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'OK: ${rental.equipmentType} retourné le ${returnDateCtrl.text}',
+                      ),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                  _loadAllRentals();
+                }
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Erreur: ${e.toString()}'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            },
+            child: const Text('Retourner'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showEditRentalDialog(EquipmentRental rental) {
-    final ambulancierCtrl =
-        TextEditingController(text: rental.ambulancierName ?? '');
-    final patientNameCtrl =
-        TextEditingController(text: rental.patientName ?? '');
-    final patientAddressCtrl =
-        TextEditingController(text: rental.patientAddress ?? '');
-    final patientPhoneCtrl =
-        TextEditingController(text: rental.patientPhoneNumber ?? '');
+    final ambulancierCtrl = TextEditingController(
+      text: rental.ambulancierName ?? '',
+    );
+    final patientNameCtrl = TextEditingController(
+      text: rental.patientName ?? '',
+    );
+    final patientAddressCtrl = TextEditingController(
+      text: rental.patientAddress ?? '',
+    );
+    final patientPhoneCtrl = TextEditingController(
+      text: rental.patientPhoneNumber ?? '',
+    );
     final costCtrl = TextEditingController(text: rental.cost.toString());
     final notesCtrl = TextEditingController(text: rental.notes ?? '');
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
+    final isSold = _isSale(rental);
 
     showDialog(
       context: context,
@@ -1492,17 +1821,20 @@ class _ManagerEquipmentRentalScreenContentState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Ambulance: ${rental.ambulanceId}\nÉquipement: ${rental.equipmentType}',
-                style:
-                    const TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+                'Ambulance: ${_ambulanceLabel(rental.ambulanceId)}\nÉquipement: ${rental.equipmentType}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 16),
 
-              // Ambulancier name
               TextFormField(
                 controller: ambulancierCtrl,
                 decoration: InputDecoration(
-                  labelText: 'Nom de l\'Ambulancier',
+                  labelText:
+                      'Nom de l'
+                      'Ambulancier',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
@@ -1510,7 +1842,6 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               const SizedBox(height: 12),
 
-              // Patient name
               TextFormField(
                 controller: patientNameCtrl,
                 decoration: InputDecoration(
@@ -1523,7 +1854,6 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               const SizedBox(height: 12),
 
-              // Patient address
               TextFormField(
                 controller: patientAddressCtrl,
                 maxLines: 2,
@@ -1537,7 +1867,6 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               const SizedBox(height: 12),
 
-              // Patient phone number
               TextFormField(
                 controller: patientPhoneCtrl,
                 decoration: InputDecoration(
@@ -1552,38 +1881,39 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               const SizedBox(height: 12),
 
-              // Return date
-              TextFormField(
-                controller: returnDateCtrl,
-                readOnly: true,
-                decoration: InputDecoration(
-                  labelText: 'Date de Retour Prévue',
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
+              if (!isSold) ...[
+                TextFormField(
+                  controller: returnDateCtrl,
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Date de Retour Prévue',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    suffixIcon: const Icon(Icons.calendar_today),
                   ),
-                  suffixIcon: const Icon(Icons.calendar_today),
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: rental.returnDate != null
+                          ? DateTime.parse(rental.returnDate!.split(' ')[0])
+                          : DateTime.now(),
+                      firstDate: DateTime.parse(rental.rentDate.split(' ')[0]),
+                      lastDate: DateTime.now().add(const Duration(days: 365)),
+                    );
+                    if (picked != null) {
+                      returnDateCtrl.text = picked.toString().split(' ')[0];
+                    }
+                  },
                 ),
-                onTap: () async {
-                  final picked = await showDatePicker(
-                    context: context,
-                    initialDate: rental.returnDate != null
-                        ? DateTime.parse(rental.returnDate!.split(' ')[0])
-                        : DateTime.now(),
-                    firstDate: DateTime.parse(rental.rentDate.split(' ')[0]),
-                    lastDate: DateTime.now().add(const Duration(days: 365)),
-                  );
-                  if (picked != null) {
-                    returnDateCtrl.text = picked.toString().split(' ')[0];
-                  }
-                },
-              ),
-              const SizedBox(height: 12),
+                const SizedBox(height: 12),
+              ],
 
-              // Cost
               TextFormField(
                 controller: costCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Coût (TND)',
                   border: OutlineInputBorder(
@@ -1593,7 +1923,6 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               const SizedBox(height: 12),
 
-              // Notes
               TextFormField(
                 controller: notesCtrl,
                 maxLines: 3,
@@ -1602,7 +1931,9 @@ class _ManagerEquipmentRentalScreenContentState
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  hintText: 'État de l\'équipement, conditions spéciales, etc.',
+                  hintText:
+                      'État de l'
+                      'équipement, conditions spéciales, etc.',
                 ),
               ),
             ],
@@ -1616,7 +1947,6 @@ class _ManagerEquipmentRentalScreenContentState
           ElevatedButton(
             onPressed: () async {
               try {
-                // Update rental with all new values
                 await _rentalService.updateEquipmentRental(
                   rentalId: rental.id,
                   ambulancierName: ambulancierCtrl.text,
@@ -1629,14 +1959,13 @@ class _ManagerEquipmentRentalScreenContentState
                   patientPhoneNumber: patientPhoneCtrl.text.isEmpty
                       ? null
                       : patientPhoneCtrl.text,
-                  returnDate: returnDateCtrl.text,
+                  returnDate: isSold ? rental.returnDate : returnDateCtrl.text,
                   cost: double.tryParse(costCtrl.text) ?? rental.cost,
                   notes: notesCtrl.text.isEmpty ? null : notesCtrl.text,
                 );
 
                 if (mounted) {
                   Navigator.pop(dialogContext);
-
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
                       content: Text('Détails mis à jour avec succès'),
@@ -1644,7 +1973,6 @@ class _ManagerEquipmentRentalScreenContentState
                       duration: Duration(seconds: 3),
                     ),
                   );
-
                   _loadAllRentals();
                 }
               } catch (e) {
@@ -1676,7 +2004,7 @@ class _ManagerEquipmentRentalScreenContentState
             const Text('Êtes-vous sûr de vouloir supprimer cette location?'),
             const SizedBox(height: 12),
             Text(
-              'Équipement: ${rental.equipmentType}\nAmbulance: ${rental.ambulanceId}',
+              'Équipement: ${rental.equipmentType}\nAmbulance: ${_ambulanceLabel(rental.ambulanceId)}',
               style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 12),
             ),
           ],
@@ -1690,7 +2018,9 @@ class _ManagerEquipmentRentalScreenContentState
             onPressed: () async {
               try {
                 await _apiClient.delete(
-                    SupabaseConfig.equipmentRentalsTable, rental.id);
+                  SupabaseConfig.equipmentRentalsTable,
+                  rental.id,
+                );
 
                 if (mounted) {
                   Navigator.pop(dialogContext);
@@ -1713,9 +2043,7 @@ class _ManagerEquipmentRentalScreenContentState
                 );
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
           ),
         ],
@@ -1751,6 +2079,36 @@ class _ManagerEquipmentRentalScreenContentState
               ),
             ),
           ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAmbulancePickerDialog(isSale: false),
+                  icon: const Icon(Icons.add),
+                  label: const Text('+ Ajouter equipement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => _showAmbulancePickerDialog(isSale: true),
+                  icon: const Icon(Icons.sell),
+                  label: const Text('Vendre equipement'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 16),
 
           // Filter buttons
@@ -1783,8 +2141,10 @@ class _ManagerEquipmentRentalScreenContentState
               children: [
                 Column(
                   children: [
-                    const Text('Total',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Total',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
                       '${_allRentals.length}',
                       style: const TextStyle(
@@ -1797,10 +2157,12 @@ class _ManagerEquipmentRentalScreenContentState
                 ),
                 Column(
                   children: [
-                    const Text('Actives',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Actives',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
-                      '${_allRentals.where((r) => r.isReturned == false).length}',
+                      '${_allRentals.where((r) => r.isReturned == false && !_isSale(r)).length}',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -1811,10 +2173,12 @@ class _ManagerEquipmentRentalScreenContentState
                 ),
                 Column(
                   children: [
-                    const Text('Retournées',
-                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    const Text(
+                      'Retournées',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                     Text(
-                      '${_allRentals.where((r) => r.isReturned == true).length}',
+                      '${_allRentals.where((r) => r.isReturned == true && !_isSale(r)).length}',
                       style: const TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -1838,8 +2202,11 @@ class _ManagerEquipmentRentalScreenContentState
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.medical_services,
-                      size: 64, color: Colors.grey[300]),
+                  Icon(
+                    Icons.medical_services,
+                    size: 64,
+                    color: Colors.grey[300],
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Aucune Location',
@@ -1878,27 +2245,39 @@ class _ManagerEquipmentRentalScreenContentState
         .toList();
 
     final totalCost = rentalsOnly.fold<double>(0, (sum, r) => sum + r.cost);
-    final soldCount = rentalsOnly
-        .where((r) => r.transactionType == 'sale')
+    final soldItems = rentalsOnly.where((r) => _isSale(r)).toList();
+    final rentedItems = rentalsOnly
+        .where((r) => !_isSale(r) && r.transactionType == 'rental')
+        .toList();
+    final soldCount = soldItems.fold<int>(0, (sum, r) => sum + r.quantity);
+    final activeCount = rentedItems
+        .where((r) => r.isReturned == false)
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final activeCount = rentalsOnly
-        .where((r) => r.transactionType == 'rental' && r.isReturned == false)
+    final returnedCount = rentedItems
+        .where((r) => r.isReturned == true)
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final returnedCount = rentalsOnly
-        .where((r) => r.transactionType == 'rental' && r.isReturned == true)
-        .fold<int>(0, (sum, r) => sum + r.quantity);
-    final averageCost =
-        rentalsOnly.isNotEmpty ? totalCost / rentalsOnly.length : 0.0;
+
+    double averageCostFor(List<EquipmentRental> items) {
+      final totalQuantity = items.fold<int>(0, (sum, r) => sum + r.quantity);
+      final totalAmount = items.fold<double>(0, (sum, r) => sum + r.cost);
+      return totalQuantity > 0 ? totalAmount / totalQuantity : 0.0;
+    }
+
+    final rentedAverageCost = averageCostFor(rentedItems);
+    final soldAverageCost = averageCostFor(soldItems);
 
     // Calculate oxygen bottles rented and remaining
     final oxygenRented = rentalsOnly
-        .where((r) =>
-            (r.equipmentType.toLowerCase().contains('oxy')) &&
-            r.transactionType == 'rental' &&
-            r.isReturned == false)
+        .where(
+          (r) =>
+              (r.equipmentType.toLowerCase().contains('oxy')) &&
+              r.transactionType == 'rental' &&
+              r.isReturned == false,
+        )
         .fold<int>(0, (sum, r) => sum + r.quantity);
-    final oxygenRemaining =
-        _totalOxygenBottles > 0 ? _totalOxygenBottles - oxygenRented : 0;
+    final oxygenRemaining = (_totalOxygenBottles - oxygenRented)
+        .clamp(0, _totalOxygenBottles)
+        .toInt();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1943,7 +2322,7 @@ class _ManagerEquipmentRentalScreenContentState
               ),
               _buildPerformanceStat(
                 'Coût Moyen',
-                '${averageCost.toStringAsFixed(2)} TND',
+                'Loc: ${rentedAverageCost.toStringAsFixed(2)} TND\nVendu: ${soldAverageCost.toStringAsFixed(2)} TND',
                 Colors.blue,
                 Icons.trending_up,
               ),
@@ -2035,8 +2414,7 @@ class _ManagerEquipmentRentalScreenContentState
 
   Widget _buildRentalCard(EquipmentRental rental) {
     final isReturned = rental.isReturned ?? false;
-    final isSold = rental.returnDate != null &&
-        rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0];
+    final isSold = _isSale(rental);
     final rentDateFormatted = rental.rentDate.split(' ')[0];
     final returnDateFormatted = rental.returnDate?.split(' ')[0] ?? 'N/A';
 
@@ -2063,15 +2441,26 @@ class _ManagerEquipmentRentalScreenContentState
                         ),
                       ),
                       const SizedBox(height: 4),
+                      Text(
+                        'Quantite: ${rental.quantity}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[700],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: isSold
                               ? Colors.orange[100]
                               : (isReturned
-                                  ? Colors.grey[200]
-                                  : Colors.green[100]),
+                                    ? Colors.grey[200]
+                                    : Colors.green[100]),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -2084,8 +2473,8 @@ class _ManagerEquipmentRentalScreenContentState
                             color: isSold
                                 ? Colors.orange[700]
                                 : (isReturned
-                                    ? Colors.grey[700]
-                                    : Colors.green[700]),
+                                      ? Colors.grey[700]
+                                      : Colors.green[700]),
                           ),
                         ),
                       ),
@@ -2217,7 +2606,7 @@ class _ManagerEquipmentRentalScreenContentState
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        rental.ambulanceId,
+                        _ambulanceLabel(rental.ambulanceId),
                         style: const TextStyle(fontWeight: FontWeight.w500),
                       ),
                     ],
@@ -2320,6 +2709,18 @@ class _ManagerEquipmentRentalScreenContentState
               ],
             ),
 
+            if (!isSold && !isReturned) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showReturnDialog(rental),
+                  icon: const Icon(Icons.assignment_return),
+                  label: const Text('Retourner equipement'),
+                ),
+              ),
+            ],
+
             // Notes
             if (rental.notes != null && rental.notes!.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -2333,10 +2734,7 @@ class _ManagerEquipmentRentalScreenContentState
                   const SizedBox(height: 4),
                   Text(
                     rental.notes!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                   ),
                 ],
               ),

@@ -10,17 +10,16 @@ import '../services/tracking_presence_service.dart';
 class ManagerShiftsScreenContent extends StatefulWidget {
   final User user;
 
-  const ManagerShiftsScreenContent({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerShiftsScreenContent({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerShiftsScreenContent> createState() =>
       _ManagerShiftsScreenContentState();
 }
 
-class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent> {
+class _ManagerShiftsScreenContentState
+    extends State<ManagerShiftsScreenContent> {
   final TrackingPresenceService _presenceService = TrackingPresenceService();
   final ShiftScheduleService _scheduleService = ShiftScheduleService();
   final CompanyStaffService _companyStaffService = CompanyStaffService();
@@ -135,12 +134,15 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
     ShiftRecurrence recurrence =
         existingSchedule?.recurrenceType ?? ShiftRecurrence.daily;
     int selectedWeekday = existingSchedule?.weekday ?? _selectedDate.weekday;
-    DateTime startsOn = existingSchedule?.startsOn ??
+    DateTime startsOn =
+        existingSchedule?.startsOn ??
         DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
     DateTime? endsOn = existingSchedule?.endsOn;
-    TimeOfDay startTime = _parseTimeOfDay(existingSchedule?.startTime) ??
+    TimeOfDay startTime =
+        _parseTimeOfDay(existingSchedule?.startTime) ??
         const TimeOfDay(hour: 8, minute: 0);
-    TimeOfDay endTime = _parseTimeOfDay(existingSchedule?.endTime) ??
+    TimeOfDay endTime =
+        _parseTimeOfDay(existingSchedule?.endTime) ??
         const TimeOfDay(hour: 16, minute: 0);
     final labelController = TextEditingController(
       text: existingSchedule?.shiftLabel ?? 'Day',
@@ -170,7 +172,8 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                 context: context,
                 initialDate: initialDate,
                 firstDate:
-                    firstDate ?? DateTime.now().subtract(const Duration(days: 365)),
+                    firstDate ??
+                    DateTime.now().subtract(const Duration(days: 365)),
                 lastDate: DateTime.now().add(const Duration(days: 730)),
               );
               if (picked != null) {
@@ -204,7 +207,9 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        existingSchedule == null ? 'Assign Shift' : 'Update Shift',
+                        existingSchedule == null
+                            ? 'Assign Shift'
+                            : 'Update Shift',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -326,9 +331,9 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                         onTap: isSaving
                             ? null
                             : () => pickDate(
-                                  initialDate: startsOn,
-                                  onPicked: (picked) => startsOn = picked,
-                                ),
+                                initialDate: startsOn,
+                                onPicked: (picked) => startsOn = picked,
+                              ),
                       ),
                       const SizedBox(height: 10),
                       _dialogLabel('Ends on (optional)'),
@@ -340,10 +345,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                         onTap: isSaving
                             ? null
                             : () => pickDate(
-                                  initialDate: endsOn ?? startsOn,
-                                  firstDate: startsOn,
-                                  onPicked: (picked) => endsOn = picked,
-                                ),
+                                initialDate: endsOn ?? startsOn,
+                                firstDate: startsOn,
+                                onPicked: (picked) => endsOn = picked,
+                              ),
                       ),
                       if (recurrence == ShiftRecurrence.weekly) ...[
                         const SizedBox(height: 10),
@@ -387,10 +392,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                                   onTap: isSaving
                                       ? null
                                       : () => pickTime(
-                                            initialTime: startTime,
-                                            onPicked: (picked) =>
-                                                startTime = picked,
-                                          ),
+                                          initialTime: startTime,
+                                          onPicked: (picked) =>
+                                              startTime = picked,
+                                        ),
                                 ),
                               ],
                             ),
@@ -407,10 +412,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                                   onTap: isSaving
                                       ? null
                                       : () => pickTime(
-                                            initialTime: endTime,
-                                            onPicked: (picked) =>
-                                                endTime = picked,
-                                          ),
+                                          initialTime: endTime,
+                                          onPicked: (picked) =>
+                                              endTime = picked,
+                                        ),
                                 ),
                               ],
                             ),
@@ -461,8 +466,8 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                           onChanged: isSaving
                               ? null
                               : (value) => setDialogState(
-                                    () => updateAll = value ?? true,
-                                  ),
+                                  () => updateAll = value ?? true,
+                                ),
                           contentPadding: EdgeInsets.zero,
                           title: const Text('Update for all'),
                           subtitle: const Text(
@@ -503,33 +508,37 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                                           driver: selectedDriver,
                                           createdBy: widget.user.id,
                                           recurrence: recurrence,
-                                          shiftLabel:
-                                              labelController.text.trim(),
+                                          shiftLabel: labelController.text
+                                              .trim(),
                                           startsOn: startsOn,
                                           endsOn: endsOn,
-                                          weekday: recurrence ==
+                                          weekday:
+                                              recurrence ==
                                                   ShiftRecurrence.weekly
                                               ? selectedWeekday
                                               : null,
-                                          startTime:
-                                              _formatTimeOfDay(startTime),
+                                          startTime: _formatTimeOfDay(
+                                            startTime,
+                                          ),
                                           endTime: _formatTimeOfDay(endTime),
                                           autoStartTracking: autoTracking,
                                         );
                                       } else if (updateAll) {
                                         await _scheduleService.updateSchedule(
                                           scheduleId: existingSchedule.id,
-                                          shiftLabel:
-                                              labelController.text.trim(),
+                                          shiftLabel: labelController.text
+                                              .trim(),
                                           recurrence: recurrence,
                                           startsOn: startsOn,
                                           endsOn: endsOn,
-                                          weekday: recurrence ==
+                                          weekday:
+                                              recurrence ==
                                                   ShiftRecurrence.weekly
                                               ? selectedWeekday
                                               : null,
-                                          startTime:
-                                              _formatTimeOfDay(startTime),
+                                          startTime: _formatTimeOfDay(
+                                            startTime,
+                                          ),
                                           endTime: _formatTimeOfDay(endTime),
                                           autoStartTracking: autoTracking,
                                           isActive: true,
@@ -540,8 +549,9 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                                       Navigator.of(dialogContext).pop();
                                       await _loadData();
                                       if (!mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         const SnackBar(
                                           content: Text('Shift saved.'),
                                           backgroundColor: Colors.green,
@@ -550,8 +560,9 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                                     } catch (error) {
                                       if (!mounted) return;
                                       setDialogState(() => isSaving = false);
-                                      ScaffoldMessenger.of(context)
-                                          .showSnackBar(
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
                                         SnackBar(
                                           content: Text(
                                             'Unable to save shift: $error',
@@ -699,7 +710,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
             child: Row(
               children: [
                 IconButton(
-                  icon: const Icon(Icons.chevron_left, color: AppColors.primary),
+                  icon: const Icon(
+                    Icons.chevron_left,
+                    color: AppColors.primary,
+                  ),
                   onPressed: () {
                     setState(() {
                       _selectedDate = _selectedDate.subtract(
@@ -721,8 +735,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                   ),
                 ),
                 IconButton(
-                  icon:
-                      const Icon(Icons.chevron_right, color: AppColors.primary),
+                  icon: const Icon(
+                    Icons.chevron_right,
+                    color: AppColors.primary,
+                  ),
                   onPressed: () {
                     setState(() {
                       _selectedDate = _selectedDate.add(
@@ -835,9 +851,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
             padding: const EdgeInsets.only(left: 88, right: 16),
             alignment: Alignment.centerLeft,
             decoration: const BoxDecoration(
-              border: Border(
-                bottom: BorderSide(color: Color(0xFFF1F4F8)),
-              ),
+              border: Border(bottom: BorderSide(color: Color(0xFFF1F4F8))),
             ),
             child: Row(
               children: _timelineHours().map((hour) {
@@ -875,9 +889,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
     return Container(
       height: 92,
       decoration: const BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: Color(0xFFF1F4F8)),
-        ),
+        border: Border(bottom: BorderSide(color: Color(0xFFF1F4F8))),
       ),
       child: Row(
         children: [
@@ -921,13 +933,15 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                       left: left.clamp(0.0, constraints.maxWidth - 120),
                       top: 15,
                       child: GestureDetector(
-                        onTap: () => _showAssignShiftDialog(
-                          existingSchedule: schedule,
-                        ),
+                        onTap: () =>
+                            _showAssignShiftDialog(existingSchedule: schedule),
                         child: Container(
                           width: width.clamp(120.0, constraints.maxWidth - 8),
                           height: 62,
-                          padding: const EdgeInsets.all(14),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
                           decoration: BoxDecoration(
                             color: color,
                             borderRadius: BorderRadius.circular(22),
@@ -942,21 +956,29 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                           child: Stack(
                             children: [
                               Column(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
                                     schedule.shiftLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                       color: Colors.white,
+                                      fontSize: 12,
+                                      height: 1.0,
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                  const Spacer(),
                                   Text(
                                     schedule.timeRangeLabel,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
                                       color: Colors.white,
-                                      fontSize: 16,
+                                      fontSize: 15,
+                                      height: 1.0,
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
@@ -1099,10 +1121,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                 const SizedBox(height: 6),
                 Text(
                   conflict.message,
-                  style: TextStyle(
-                    color: Colors.grey.shade800,
-                    height: 1.35,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade800, height: 1.35),
                 ),
               ],
             ),
@@ -1139,11 +1158,16 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
             )
           else
             ..._liveShifts.take(3).map((shift) {
-              final claim = _liveClaims.where((item) => item.shiftId == shift.id);
+              final claim = _liveClaims.where(
+                (item) => item.shiftId == shift.id,
+              );
               final activeClaim = claim.isEmpty ? null : claim.first;
               return Container(
                 margin: const EdgeInsets.only(bottom: 10),
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF8FAFD),
                   borderRadius: BorderRadius.circular(18),
@@ -1151,8 +1175,9 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                 child: Row(
                   children: [
                     CircleAvatar(
-                      backgroundColor:
-                          AppColors.primary.withValues(alpha: 0.12),
+                      backgroundColor: AppColors.primary.withValues(
+                        alpha: 0.12,
+                      ),
                       child: Text(
                         _initials(shift.driverName),
                         style: const TextStyle(
@@ -1182,8 +1207,10 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
                     ),
                     IconButton(
                       onPressed: () => _endShift(shift),
-                      icon: const Icon(Icons.stop_circle_outlined,
-                          color: Colors.red),
+                      icon: const Icon(
+                        Icons.stop_circle_outlined,
+                        color: Colors.red,
+                      ),
                     ),
                   ],
                 ),
@@ -1205,10 +1232,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
     );
   }
 
-  Widget _tapShell({
-    required String label,
-    required VoidCallback? onTap,
-  }) {
+  Widget _tapShell({required String label, required VoidCallback? onTap}) {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
@@ -1224,10 +1248,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
     );
   }
 
-  Widget _presetChip({
-    required String label,
-    required VoidCallback onTap,
-  }) {
+  Widget _presetChip({required String label, required VoidCallback onTap}) {
     return ActionChip(
       label: Text(label),
       onPressed: onTap,
@@ -1257,10 +1278,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
               const Icon(Icons.check, size: 16),
               const SizedBox(width: 6),
             ],
-            Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -1270,10 +1288,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
   Widget _dialogLabel(String text) {
     return Text(
       text,
-      style: const TextStyle(
-        fontSize: 13,
-        color: Color(0xFF7C6F6F),
-      ),
+      style: const TextStyle(fontSize: 13, color: Color(0xFF7C6F6F)),
     );
   }
 
@@ -1285,10 +1300,7 @@ class _ManagerShiftsScreenContentState extends State<ManagerShiftsScreenContent>
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: const Color(0xFFEAF0F6)),
       ),
-      child: Text(
-        text,
-        style: TextStyle(color: Colors.grey.shade700),
-      ),
+      child: Text(text, style: TextStyle(color: Colors.grey.shade700)),
     );
   }
 

@@ -2,18 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../config/constants.dart';
 import '../models/user_model.dart';
+import '../services/api_client.dart';
 import '../services/company_staff_service.dart';
+import '../services/maintenance_rule_service.dart';
 import '../services/maintenance_service.dart';
 import '../utils/responsive.dart';
 
 class AddMaintenanceScreen extends StatefulWidget {
   final User user;
   final String ambulanceId;
+  final String? ambulanceName;
 
   const AddMaintenanceScreen({
     Key? key,
     required this.user,
     required this.ambulanceId,
+    this.ambulanceName,
   }) : super(key: key);
 
   @override
@@ -41,35 +45,28 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
     'Pneus',
     'Liquide de Frein',
     'Urgent',
-    'Autre'
+    'Autre',
   ];
 
   // Mapping from French display names to English database values
   final Map<String, String> _maintenanceTypeMapping = {
     'Vidange': 'oil change',
     'Plaquettes de Frein': 'brake pad replacement',
-    'Bougies': 'oil change',
-    'Pneus': 'brake pad replacement',
-    'Liquide de Frein': 'brake pad replacement',
+    'Bougies': 'spark plugs',
+    'Pneus': 'tires',
+    'Liquide de Frein': 'brake fluid',
     'Urgent': 'urgent',
     'Autre': 'pending',
   };
 
-  // Maintenance intervals (in days or km - for now using days)
-  final Map<String, int> _maintenanceIntervals = {
-    'Vidange': 180, // 6 months
-    'Plaquettes de Frein': 365, // 1 year
-    'Bougies': 365,
-    'Pneus': 365,
-    'Liquide de Frein': 365,
-    'Urgent': 90,
-    'Autre': 90,
-  };
-
   final _formKey = GlobalKey<FormState>();
   final MaintenanceService _maintenanceService = MaintenanceService();
+  final MaintenanceRuleService _maintenanceRuleService =
+      MaintenanceRuleService();
   final CompanyStaffService _companyStaffService = CompanyStaffService();
+  final ApiClient _apiClient = ApiClient();
   bool _isLoading = false;
+  late String _ambulanceDisplayName;
   List<User> _companyStaff = [];
   final Set<String> _selectedTeammateIds = {};
 
@@ -83,10 +80,28 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
     _priceController = TextEditingController();
     _mechanicController = TextEditingController();
     _notesController = TextEditingController();
-    _driverController = TextEditingController(text: widget.user.name ?? '');
+    _driverController = TextEditingController(text: widget.user.name);
     _customMaintenanceTypeController = TextEditingController();
     _kilometrageController = TextEditingController();
+    _ambulanceDisplayName = widget.ambulanceName ?? widget.ambulanceId;
+    _loadAmbulanceDisplayName();
     _loadCompanyStaff();
+  }
+
+  Future<void> _loadAmbulanceDisplayName() async {
+    try {
+      final rows = await _apiClient.get(
+        SupabaseConfig.ambulancesTable,
+        filters: {'id': 'eq.${widget.ambulanceId}'},
+      );
+      if (!mounted || rows.isEmpty) return;
+      final number = (rows.first['ambulance_number'] ?? '').toString().trim();
+      if (number.isNotEmpty) {
+        setState(() => _ambulanceDisplayName = number);
+      }
+    } catch (e) {
+      print('[AddMaintenance] Error loading ambulance name: $e');
+    }
   }
 
   Future<void> _loadCompanyStaff() async {
@@ -99,7 +114,9 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
       final staff = await _companyStaffService.getCompanyStaff(tenantId);
       if (!mounted) return;
       setState(() {
-        _companyStaff = staff.where((member) => member.id != widget.user.id).toList();
+        _companyStaff = staff
+            .where((member) => member.id != widget.user.id)
+            .toList();
       });
       _updateDriverField();
     } catch (e) {
@@ -151,15 +168,56 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
 
     if (pickedDate != null) {
       controller.text = DateFormat('dd/MM/yyyy').format(pickedDate);
+      if (controller == _dateController) {
+        _updateNextServiceDate();
+      }
     }
   }
 
-  void _updateNextServiceDate() {
-    if (_selectedMaintenanceType != null) {
-      final days = _maintenanceIntervals[_selectedMaintenanceType!] ?? 90;
-      final nextDate = DateTime.now().add(Duration(days: days));
-      _nextServiceController.text = DateFormat('dd/MM/yyyy').format(nextDate);
+  Future<void> _updateNextServiceDate() async {
+    final tenantId = widget.user.tenantId;
+    if (tenantId == null ||
+        tenantId.isEmpty ||
+        _selectedMaintenanceType == null) {
+      _nextServiceController.clear();
+      return;
     }
+
+    try {
+      final maintenanceType = _getDatabaseMaintenanceType();
+      final rule = await _maintenanceRuleService.getRuleForType(
+        tenantId,
+        maintenanceType,
+      );
+      if (!mounted) return;
+
+      if (rule == null || !rule.enabled || rule.intervalDays == null) {
+        setState(() => _nextServiceController.clear());
+        return;
+      }
+
+      final dateFormat = DateFormat('dd/MM/yyyy');
+      final baseDate = dateFormat.parse(_dateController.text);
+      final nextDate = baseDate.add(Duration(days: rule.intervalDays!));
+      setState(() {
+        _nextServiceController.text = dateFormat.format(nextDate);
+      });
+    } catch (e) {
+      print('[AddMaintenance] Error loading maintenance rule: $e');
+      if (mounted) {
+        setState(() => _nextServiceController.clear());
+      }
+    }
+  }
+
+  String _getDatabaseMaintenanceType() {
+    if (_selectedMaintenanceType == 'Autre') {
+      final customType = _customMaintenanceTypeController.text.trim();
+      return customType.isEmpty
+          ? 'custom maintenance'
+          : customType.toLowerCase();
+    }
+    return _maintenanceTypeMapping[_selectedMaintenanceType] ?? 'pending';
   }
 
   void _submitForm() async {
@@ -177,20 +235,40 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
         final isoDate = parsedDate.toIso8601String();
 
         print(
-            '[AddMaintenance] Parsed date: ${_dateController.text} -> $isoDate');
+          '[AddMaintenance] Parsed date: ${_dateController.text} -> $isoDate',
+        );
 
-        // Get the database value from the French display name or use custom type
-        String databaseMaintenanceType = 'pending';
-        if (_selectedMaintenanceType == 'Autre') {
-          // Use the custom maintenance type entered by the user
-          databaseMaintenanceType =
-              _customMaintenanceTypeController.text.isEmpty
-                  ? 'custom maintenance'
-                  : _customMaintenanceTypeController.text.toLowerCase();
-        } else {
-          databaseMaintenanceType =
-              _maintenanceTypeMapping[_selectedMaintenanceType] ?? 'pending';
+        final databaseMaintenanceType = _getDatabaseMaintenanceType();
+        final tenantId = widget.user.tenantId;
+        final rule = tenantId == null || tenantId.isEmpty
+            ? null
+            : await _maintenanceRuleService.getRuleForType(
+                tenantId,
+                databaseMaintenanceType,
+              );
+
+        if (_selectedMaintenanceType == 'Autre' &&
+            tenantId != null &&
+            tenantId.isNotEmpty) {
+          await _maintenanceRuleService.ensureRuleForType(
+            tenantId: tenantId,
+            maintenanceType: databaseMaintenanceType,
+          );
         }
+
+        final currentKm = double.tryParse(_kilometrageController.text) ?? 0;
+        final intervalKm = rule?.enabled == true ? rule?.intervalKm : null;
+        final intervalDays = rule?.enabled == true ? rule?.intervalDays : null;
+        final warningBeforeKm = rule?.enabled == true
+            ? rule?.warningBeforeKm
+            : null;
+        final warningBeforeDays = rule?.enabled == true
+            ? rule?.warningBeforeDays
+            : null;
+        final nextDueKm = intervalKm != null ? currentKm + intervalKm : null;
+        final nextDueDate = intervalDays != null
+            ? parsedDate.add(Duration(days: intervalDays))
+            : null;
 
         // Prepare data for API
         final maintenanceData = {
@@ -204,31 +282,48 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
           'notes': _notesController.text,
           'user_id': widget.user.id,
           'driver_name': _driverController.text,
-          'kilometrage': double.tryParse(_kilometrageController.text) ?? 0,
+          'kilometrage': currentKm,
+          if (nextDueKm != null) 'next_due_km': nextDueKm,
+          if (nextDueDate != null)
+            'next_due_date': nextDueDate.toIso8601String(),
+          if (intervalKm != null) 'interval_km': intervalKm,
+          if (intervalDays != null) 'interval_days': intervalDays,
+          if (warningBeforeKm != null) 'warning_before_km': warningBeforeKm,
+          if (warningBeforeDays != null)
+            'warning_before_days': warningBeforeDays,
         };
 
         print('[AddMaintenance] Form data prepared:');
         print(
-            '[AddMaintenance] - Ambulance ID: ${maintenanceData['ambulance_id']}');
+          '[AddMaintenance] - Ambulance ID: ${maintenanceData['ambulance_id']}',
+        );
         print('[AddMaintenance] - Date: ${maintenanceData['date']}');
         print(
-            '[AddMaintenance] - Type: ${maintenanceData['maintenance_type']}');
+          '[AddMaintenance] - Type: ${maintenanceData['maintenance_type']}',
+        );
         print(
-            '[AddMaintenance] - Description: ${maintenanceData['maintenance_description']}');
+          '[AddMaintenance] - Description: ${maintenanceData['maintenance_description']}',
+        );
         print(
-            '[AddMaintenance] - Mechanic: ${maintenanceData['mechanic_name']}');
+          '[AddMaintenance] - Mechanic: ${maintenanceData['mechanic_name']}',
+        );
         print(
-            '[AddMaintenance] - Price: ${maintenanceData['price_per_piece']} TND');
+          '[AddMaintenance] - Price: ${maintenanceData['price_per_piece']} TND',
+        );
         print('[AddMaintenance] - User ID: ${maintenanceData['user_id']}');
         print(
-            '[AddMaintenance] - Driver Name: ${maintenanceData['driver_name']}');
+          '[AddMaintenance] - Driver Name: ${maintenanceData['driver_name']}',
+        );
         print('[AddMaintenance] - Notes: ${maintenanceData['notes']}');
         print(
-            '[AddMaintenance] - Kilometrage: ${maintenanceData['kilometrage']}');
+          '[AddMaintenance] - Kilometrage: ${maintenanceData['kilometrage']}',
+        );
         print(
-            '[AddMaintenance] - Kilometrage Controller Text: "${_kilometrageController.text}" (empty: ${_kilometrageController.text.isEmpty})');
+          '[AddMaintenance] - Kilometrage Controller Text: "${_kilometrageController.text}" (empty: ${_kilometrageController.text.isEmpty})',
+        );
         print(
-            '[AddMaintenance] - Kilometrage parsed: ${double.tryParse(_kilometrageController.text)} (type: ${double.tryParse(_kilometrageController.text).runtimeType})');
+          '[AddMaintenance] - Kilometrage parsed: ${double.tryParse(_kilometrageController.text)} (type: ${double.tryParse(_kilometrageController.text).runtimeType})',
+        );
 
         // TODO: Call MaintenanceService to submit
         print('[AddMaintenance] Ready to submit to API');
@@ -270,11 +365,11 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
           children: [
             const Text('Nouveau Dossier d\'Entretien'),
             Text(
-              widget.ambulanceId,
+              _ambulanceDisplayName,
               style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ),
@@ -301,8 +396,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                 onTap: () => _selectDate(_dateController),
                 decoration: InputDecoration(
                   hintText: 'dd/mm/yyyy',
-                  suffixIcon:
-                      Icon(Icons.calendar_today, color: AppColors.primary),
+                  suffixIcon: Icon(
+                    Icons.calendar_today,
+                    color: AppColors.primary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -317,8 +414,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print('[AddMaintenance] Date validator - value: "$value"');
@@ -353,8 +452,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print('[AddMaintenance] Driver validator - value: "$value"');
@@ -395,21 +496,20 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
               DropdownButtonFormField<String>(
                 value: _selectedMaintenanceType,
                 items: _maintenanceTypesFrench.map((type) {
-                  return DropdownMenuItem(
-                    value: type,
-                    child: Text(type),
-                  );
+                  return DropdownMenuItem(value: type, child: Text(type));
                 }).toList(),
                 onChanged: (value) {
                   setState(() {
                     _selectedMaintenanceType = value;
-                    _updateNextServiceDate();
                   });
+                  _updateNextServiceDate();
                 },
                 decoration: InputDecoration(
                   hintText: 'Sélectionner un type',
-                  suffixIcon:
-                      Icon(Icons.arrow_drop_down, color: AppColors.primary),
+                  suffixIcon: Icon(
+                    Icons.arrow_drop_down,
+                    color: AppColors.primary,
+                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide(color: Colors.grey[300]!),
@@ -424,8 +524,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print('[AddMaintenance] Type validator - value: "$value"');
@@ -448,6 +550,7 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: _customMaintenanceTypeController,
+                      onChanged: (_) => _updateNextServiceDate(),
                       decoration: InputDecoration(
                         hintText: 'Entrer le type d\'entretien personnalisé',
                         prefixIcon: Icon(Icons.edit, color: AppColors.primary),
@@ -466,11 +569,14 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                         filled: true,
                         fillColor: Colors.grey[50],
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16, vertical: 14),
+                          horizontal: 16,
+                          vertical: 14,
+                        ),
                       ),
                       validator: (value) {
                         print(
-                            '[AddMaintenance] Custom type validator - value: "$value"');
+                          '[AddMaintenance] Custom type validator - value: "$value"',
+                        );
                         if (_selectedMaintenanceType == 'Autre') {
                           return value?.isEmpty ?? true
                               ? 'Type d\'entretien requis'
@@ -508,12 +614,15 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print(
-                      '[AddMaintenance] Mechanic validator - value: "$value"');
+                    '[AddMaintenance] Mechanic validator - value: "$value"',
+                  );
                   return value?.isEmpty ?? true
                       ? 'Nom du mécanicien requis'
                       : null;
@@ -555,11 +664,14 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                             filled: true,
                             fillColor: Colors.grey[50],
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
                           ),
                           validator: (value) {
                             print(
-                                '[AddMaintenance] Price validator - value: "$value"');
+                              '[AddMaintenance] Price validator - value: "$value"',
+                            );
                             // Allow empty (will default to 0)
                             if (value != null && value.isNotEmpty) {
                               final parsed = double.tryParse(value);
@@ -590,8 +702,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                           onTap: () => _selectDate(_nextServiceController),
                           decoration: InputDecoration(
                             hintText: 'mm/dd/yyyy',
-                            suffixIcon: Icon(Icons.calendar_today,
-                                color: AppColors.primary),
+                            suffixIcon: Icon(
+                              Icons.calendar_today,
+                              color: AppColors.primary,
+                            ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                               borderSide: BorderSide(color: Colors.grey[300]!),
@@ -607,14 +721,15 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                             filled: true,
                             fillColor: Colors.grey[50],
                             contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
                           ),
                           validator: (value) {
                             print(
-                                '[AddMaintenance] Next service validator - value: "$value"');
-                            return value?.isEmpty ?? true
-                                ? 'Intervalle requis'
-                                : null;
+                              '[AddMaintenance] Next service validator - value: "$value"',
+                            );
+                            return null;
                           },
                         ),
                       ],
@@ -652,12 +767,15 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print(
-                      '[AddMaintenance] Kilometrage validator - value: "$value"');
+                    '[AddMaintenance] Kilometrage validator - value: "$value"',
+                  );
                   // Allow empty (will default to 0)
                   if (value != null && value.isNotEmpty) {
                     final parsed = double.tryParse(value);
@@ -696,12 +814,15 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
                 validator: (value) {
                   print(
-                      '[AddMaintenance] Description validator - value: "$value"');
+                    '[AddMaintenance] Description validator - value: "$value"',
+                  );
                   return value?.isEmpty ?? true ? 'Description requise' : null;
                 },
               ),
@@ -732,8 +853,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   ),
                   filled: true,
                   fillColor: Colors.grey[50],
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -773,9 +896,9 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                             ? 'Enregistrement...'
                             : 'Enregistrer le dossier',
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
                       ),
                     ],
                   ),
@@ -798,9 +921,9 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                   child: Text(
                     'Annuler',
                     style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey[700],
-                        ),
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[700],
+                    ),
                   ),
                 ),
               ),

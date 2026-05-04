@@ -10,11 +10,16 @@
  * - Connection status monitoring
  */
 
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geocoding/geocoding.dart';
+import 'package:http/http.dart' as http;
 import '../../models/user_model.dart';
+import '../../models/ambulance_model.dart';
+import '../../services/api_client.dart';
 import '../../services/fleet_tracking/fleet_viewer_service.dart';
 import '../../services/fleet_tracking/fleet_tracking_models.dart';
 import '../../config/constants.dart';
@@ -22,23 +27,24 @@ import '../../config/constants.dart';
 class FleetViewerMapScreen extends StatefulWidget {
   final User user;
 
-  const FleetViewerMapScreen({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const FleetViewerMapScreen({Key? key, required this.user}) : super(key: key);
 
   @override
   State<FleetViewerMapScreen> createState() => _FleetViewerMapScreenState();
 }
 
 class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
-  late FleetViewerService _viewerService;
+  FleetViewerService? _viewerService;
   late MapController _mapController;
+  final ApiClient _apiClient = ApiClient();
 
   bool _isConnected = false;
   bool _isFullscreen = false;
   bool _hasInitialFit = false; // Prevent repeated map refitting
   List<DriverLocation> _drivers = [];
+  final Set<String> _tenantAmbulanceIds = <String>{};
+  final Map<String, String> _tenantAmbulanceNumbers = <String, String>{};
+  bool _isLoadingTenantFleet = true;
   DriverLocation? _selectedDriver;
   String? _error;
   int _updateCount = 0;
@@ -51,17 +57,66 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
     _initializeViewer();
   }
 
+  Future<void> _loadTenantFleet() async {
+    final tenantId = widget.user.tenantId?.trim();
+    if (tenantId == null || tenantId.isEmpty) {
+      throw Exception('Tenant manager introuvable pour le suivi temps reel.');
+    }
+
+    final rows = await _apiClient.get(
+      SupabaseConfig.ambulancesTable,
+      filters: {'tenant_id': 'eq.$tenantId'},
+    );
+    final ambulances = rows
+        .map((row) => Ambulance.fromJson(row))
+        .where((ambulance) => ambulance.id.isNotEmpty)
+        .toList();
+
+    _tenantAmbulanceIds
+      ..clear()
+      ..addAll(ambulances.map((ambulance) => ambulance.id));
+    _tenantAmbulanceNumbers
+      ..clear()
+      ..addEntries(
+        ambulances.map(
+          (ambulance) => MapEntry(ambulance.id, ambulance.ambulanceNumber),
+        ),
+      );
+  }
+
+  List<DriverLocation> _filterTenantDrivers(List<DriverLocation> drivers) {
+    if (_tenantAmbulanceIds.isEmpty) return <DriverLocation>[];
+    return drivers
+        .where((driver) => _tenantAmbulanceIds.contains(driver.ambulanceId))
+        .toList();
+  }
+
+  String _ambulanceDisplayName(String ambulanceId) {
+    final number = _tenantAmbulanceNumbers[ambulanceId];
+    if (number == null || number.trim().isEmpty) return ambulanceId;
+    return number;
+  }
+
+  String _placeDisplayName(DriverLocation driver) {
+    return _driverPlaceNames[driver.driverId] ?? 'Resolving place...';
+  }
+
   /**
    * Initialize fleet viewer
    */
   Future<void> _initializeViewer() async {
     try {
+      await _loadTenantFleet();
+      if (mounted) {
+        setState(() => _isLoadingTenantFleet = false);
+      }
+
       _viewerService = FleetViewerService(
         backendUrl: 'https://ambulance-backend-1-n6wd.onrender.com',
       );
 
       // Setup listeners
-      _viewerService.onConnected(() {
+      _viewerService!.onConnected(() {
         if (mounted) {
           setState(() {
             _isConnected = true;
@@ -78,7 +133,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
         }
       });
 
-      _viewerService.onDisconnected(() {
+      _viewerService!.onDisconnected(() {
         if (mounted) {
           setState(() {
             _isConnected = false;
@@ -94,10 +149,14 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
         }
       });
 
-      _viewerService.onDriversUpdate((drivers) {
+      _viewerService!.onDriversUpdate((drivers) {
         if (mounted) {
           setState(() {
-            _drivers = drivers;
+            _drivers = _filterTenantDrivers(drivers);
+            if (_selectedDriver != null &&
+                !_tenantAmbulanceIds.contains(_selectedDriver!.ambulanceId)) {
+              _selectedDriver = null;
+            }
             _updateCount++;
           });
           // Only fit map bounds on first load
@@ -106,17 +165,28 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
             _hasInitialFit = true;
           }
           // Fetch place names for all drivers
-          for (var driver in drivers) {
+          for (var driver in _drivers) {
             _getPlaceName(driver);
           }
         }
       });
 
-      _viewerService.onLocationUpdate((driver) {
+      _viewerService!.onLocationUpdate((driver) {
         if (mounted) {
+          if (!_tenantAmbulanceIds.contains(driver.ambulanceId)) {
+            setState(() {
+              _drivers.removeWhere((d) => d.driverId == driver.driverId);
+              if (_selectedDriver?.driverId == driver.driverId) {
+                _selectedDriver = null;
+              }
+            });
+            return;
+          }
+
           setState(() {
-            final index =
-                _drivers.indexWhere((d) => d.driverId == driver.driverId);
+            final index = _drivers.indexWhere(
+              (d) => d.driverId == driver.driverId,
+            );
             if (index >= 0) {
               _drivers[index] = driver;
             } else {
@@ -128,7 +198,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
         }
       });
 
-      _viewerService.onDriverOffline((driverId) {
+      _viewerService!.onDriverOffline((driverId) {
         if (mounted) {
           setState(() {
             _drivers.removeWhere((d) => d.driverId == driverId);
@@ -146,7 +216,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
         }
       });
 
-      _viewerService.onError((error) {
+      _viewerService!.onError((error) {
         if (mounted) {
           setState(() {
             _error = error;
@@ -155,11 +225,12 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
       });
 
       // Connect
-      await _viewerService.connect();
+      await _viewerService!.connect();
     } catch (error) {
       if (mounted) {
         setState(() {
           _error = error.toString();
+          _isLoadingTenantFleet = false;
         });
       }
     }
@@ -184,13 +255,12 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
       maxLng = maxLng < driver.longitude ? driver.longitude : maxLng;
     }
 
-    final bounds = LatLngBounds(
-      LatLng(minLat, minLng),
-      LatLng(maxLat, maxLng),
-    );
+    final bounds = LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng));
 
-    _mapController.fitBounds(bounds,
-        options: const FitBoundsOptions(padding: EdgeInsets.all(50)));
+    _mapController.fitBounds(
+      bounds,
+      options: const FitBoundsOptions(padding: EdgeInsets.all(50)),
+    );
   }
 
   /**
@@ -202,6 +272,36 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
     return AppColors.primary;
   }
 
+  Future<String?> _reverseGeocodeWithOsm(DriverLocation driver) async {
+    try {
+      final uri = Uri.https('nominatim.openstreetmap.org', '/reverse', {
+        'format': 'jsonv2',
+        'lat': driver.latitude.toString(),
+        'lon': driver.longitude.toString(),
+        'zoom': '18',
+        'addressdetails': '1',
+      });
+      final response = await http
+          .get(
+            uri,
+            headers: const {
+              'User-Agent': 'AmbuGestion/1.0 realtime fleet viewer',
+            },
+          )
+          .timeout(const Duration(seconds: 4));
+
+      if (response.statusCode != 200) return null;
+      final payload = jsonDecode(response.body) as Map<String, dynamic>;
+      final displayName = payload['display_name']?.toString().trim();
+      if (displayName != null && displayName.isNotEmpty) {
+        return displayName;
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
+  }
+
   /**
    * Get place name from coordinates using reverse geocoding
    */
@@ -211,31 +311,43 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
     }
 
     try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(
+      final placemarks = await placemarkFromCoordinates(
         driver.latitude,
         driver.longitude,
       );
 
+      String? placeName;
       if (placemarks.isNotEmpty) {
         final place = placemarks[0];
-        final placeName = [place.street, place.locality, place.country]
-            .where((p) => p != null && p.isNotEmpty)
-            .join(', ');
-
-        if (mounted) {
-          setState(() {
-            _driverPlaceNames[driver.driverId] = placeName.isNotEmpty
-                ? placeName
-                : '${driver.latitude.toStringAsFixed(4)}, ${driver.longitude.toStringAsFixed(4)}';
-          });
-        }
+        final parts = [
+          place.street,
+          place.subLocality,
+          place.locality,
+          place.administrativeArea,
+          place.country,
+        ].where((p) => p != null && p.trim().isNotEmpty).cast<String>();
+        placeName = parts.join(', ');
       }
-    } catch (error) {
-      // Geocoding failed (e.g., no Google Play Services on emulator) - use coordinates as fallback
+      if (placeName == null || placeName.trim().isEmpty) {
+        placeName = await _reverseGeocodeWithOsm(driver);
+      }
+
       if (mounted) {
         setState(() {
           _driverPlaceNames[driver.driverId] =
-              '${driver.latitude.toStringAsFixed(4)}, ${driver.longitude.toStringAsFixed(4)}';
+              placeName?.trim().isNotEmpty == true
+              ? placeName!.trim()
+              : 'Place unavailable';
+        });
+      }
+    } catch (error) {
+      final placeName = await _reverseGeocodeWithOsm(driver);
+      if (mounted) {
+        setState(() {
+          _driverPlaceNames[driver.driverId] =
+              placeName?.trim().isNotEmpty == true
+              ? placeName!.trim()
+              : 'Place unavailable';
         });
       }
     }
@@ -243,12 +355,16 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
 
   @override
   void dispose() {
-    _viewerService.disconnect();
+    _viewerService?.disconnect();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingTenantFleet) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return Stack(
       children: [
         // Map
@@ -280,8 +396,8 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                       setState(() {
                         _selectedDriver =
                             _selectedDriver?.driverId == driver.driverId
-                                ? null
-                                : driver;
+                            ? null
+                            : driver;
                       });
                     },
                     child: Column(
@@ -294,10 +410,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                                 ? Colors.blueAccent
                                 : _getMarkerColor(driver),
                             shape: BoxShape.circle,
-                            border: Border.all(
-                              color: Colors.white,
-                              width: 2,
-                            ),
+                            border: Border.all(color: Colors.white, width: 2),
                           ),
                           child: Icon(
                             Icons.directions_car,
@@ -339,7 +452,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${_drivers.length} drivers online',
+                          '${_drivers.length} ambulances online',
                           style: const TextStyle(
                             fontSize: 12,
                             color: Colors.grey,
@@ -412,10 +525,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
             child: FloatingActionButton.small(
               backgroundColor: Colors.white,
               elevation: 4,
-              child: const Icon(
-                Icons.fullscreen_exit,
-                color: Colors.black,
-              ),
+              child: const Icon(Icons.fullscreen_exit, color: Colors.black),
               onPressed: () {
                 setState(() {
                   _isFullscreen = !_isFullscreen;
@@ -454,12 +564,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
 
         // Driver list (bottom sheet)
         if (!_isFullscreen)
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: _buildDriverList(),
-          ),
+          Positioned(bottom: 0, left: 0, right: 0, child: _buildDriverList()),
       ],
     );
   }
@@ -508,7 +613,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'Active Drivers',
+                        'Active Ambulances',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
@@ -540,7 +645,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Center(
                         child: Text(
-                          'No active drivers',
+                          'No active ambulances for your company',
                           style: TextStyle(color: Colors.grey),
                         ),
                       ),
@@ -567,8 +672,8 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                               ),
                               title: Text(driver.driverName),
                               subtitle: Text(
-                                '${driver.ambulanceId}\n'
-                                '📍 ${_driverPlaceNames[driver.driverId] ?? 'Loading location...'}',
+                                'Ambulance: ${_ambulanceDisplayName(driver.ambulanceId)}\n'
+                                'Location: ${_placeDisplayName(driver)}',
                                 style: const TextStyle(fontSize: 11),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -650,12 +755,12 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Ambulance: ${driver.ambulanceId}',
+              'Ambulance: ${_ambulanceDisplayName(driver.ambulanceId)}',
               style: TextStyle(fontSize: 12, color: Colors.grey[700]),
             ),
             const SizedBox(height: 4),
             Text(
-              '📍 ${_driverPlaceNames[driver.driverId] ?? 'Loading location...'}',
+              'Location: ${_placeDisplayName(driver)}',
               style: TextStyle(fontSize: 11, color: Colors.grey[600]),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,

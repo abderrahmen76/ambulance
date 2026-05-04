@@ -4,18 +4,17 @@ import 'package:flutter/material.dart';
 
 import '../../config/constants.dart';
 import '../../models/ambulance_model.dart';
+import '../../models/maintenance_rule_model.dart';
 import '../../models/user_model.dart';
 import '../../services/api_client.dart';
 import '../../services/company_staff_service.dart';
+import '../../services/maintenance_rule_service.dart';
 import '../../services/manager_onboarding_service.dart';
 
 class ManagerSettingsScreenOptimized extends StatefulWidget {
   final User user;
 
-  const ManagerSettingsScreenOptimized({
-    required this.user,
-    super.key,
-  });
+  const ManagerSettingsScreenOptimized({required this.user, super.key});
 
   @override
   State<ManagerSettingsScreenOptimized> createState() =>
@@ -27,6 +26,8 @@ class _ManagerSettingsScreenOptimizedState
   final CompanyStaffService _companyStaffService = CompanyStaffService();
   final ManagerOnboardingService _managerOnboardingService =
       ManagerOnboardingService();
+  final MaintenanceRuleService _maintenanceRuleService =
+      MaintenanceRuleService();
   final ApiClient _apiClient = ApiClient();
 
   final TextEditingController _companyNameController = TextEditingController();
@@ -44,6 +45,7 @@ class _ManagerSettingsScreenOptimizedState
 
   List<User> _drivers = const [];
   List<Ambulance> _ambulances = const [];
+  List<MaintenanceRule> _maintenanceRules = const [];
 
   String get _tenantId => widget.user.tenantId ?? '';
 
@@ -79,23 +81,26 @@ class _ManagerSettingsScreenOptimizedState
           SupabaseConfig.ambulancesTable,
           filters: {'tenant_id': 'eq.$_tenantId'},
         ),
+        _maintenanceRuleService.getRules(_tenantId),
       ]);
 
       final onboardingState = results[0] as Map<String, dynamic>;
       final drivers = results[1] as List<User>;
       final ambulanceRows = results[2] as List<Map<String, dynamic>>;
+      final maintenanceRules = results[3] as List<MaintenanceRule>;
 
       final tenant = onboardingState['tenant'] is Map<String, dynamic>
           ? Map<String, dynamic>.from(
               onboardingState['tenant'] as Map<String, dynamic>,
             )
           : onboardingState['tenant'] is Map
-              ? Map<String, dynamic>.from(onboardingState['tenant'] as Map)
-              : null;
+          ? Map<String, dynamic>.from(onboardingState['tenant'] as Map)
+          : null;
       final ambulances = ambulanceRows.map(Ambulance.fromJson).toList();
 
       _drivers = drivers;
       _ambulances = ambulances;
+      _maintenanceRules = maintenanceRules;
       _hydrateCompanyControllers(tenant);
     } catch (e) {
       _showSnackBar('Erreur lors du chargement des paramètres: $e');
@@ -122,10 +127,11 @@ class _ManagerSettingsScreenOptimizedState
     _companyPhonesController.text = phoneNumbers.isNotEmpty
         ? phoneNumbers.join('\n')
         : fallbackPhone;
-    _companyCityController.text =
-        _readMetadataString(metadata, 'company_city');
-    _companyAddressController.text =
-        _readMetadataString(metadata, 'company_address');
+    _companyCityController.text = _readMetadataString(metadata, 'company_city');
+    _companyAddressController.text = _readMetadataString(
+      metadata,
+      'company_address',
+    );
   }
 
   Map<String, dynamic> _readMetadata(dynamic rawMetadata) {
@@ -485,6 +491,232 @@ class _ManagerSettingsScreenOptimizedState
     }
   }
 
+  Future<void> _showMaintenanceRuleDialog({MaintenanceRule? rule}) async {
+    final isEdit = rule != null;
+    const maintenanceTypes = [
+      'Vidange',
+      'Plaquettes de Frein',
+      'Bougies',
+      'Pneus',
+      'Liquide de Frein',
+      'Urgent',
+      'Autre',
+    ];
+    const storedTypeToFrench = {
+      'oil change': 'Vidange',
+      'brake pad replacement': 'Plaquettes de Frein',
+      'spark plugs': 'Bougies',
+      'tires': 'Pneus',
+      'brake fluid': 'Liquide de Frein',
+      'urgent': 'Urgent',
+    };
+    const frenchTypeToStored = {
+      'Vidange': 'oil change',
+      'Plaquettes de Frein': 'brake pad replacement',
+      'Bougies': 'spark plugs',
+      'Pneus': 'tires',
+      'Liquide de Frein': 'brake fluid',
+      'Urgent': 'urgent',
+    };
+    final existingType = rule?.maintenanceType.trim().toLowerCase() ?? '';
+    String selectedType =
+        storedTypeToFrench[existingType] ??
+        (maintenanceTypes.contains(rule?.maintenanceType)
+            ? rule!.maintenanceType
+            : 'Autre');
+    final customTypeController = TextEditingController(
+      text: selectedType == 'Autre' ? rule?.maintenanceType ?? '' : '',
+    );
+    final intervalKmController = TextEditingController(
+      text: rule?.intervalKm?.toString() ?? '',
+    );
+    final intervalDaysController = TextEditingController(
+      text: rule?.intervalDays?.toString() ?? '',
+    );
+    final warningKmController = TextEditingController(
+      text: rule?.warningBeforeKm?.toString() ?? '',
+    );
+    final warningDaysController = TextEditingController(
+      text: rule?.warningBeforeDays?.toString() ?? '',
+    );
+    bool enabled = rule?.enabled ?? true;
+
+    int? parseOptionalInt(String value) {
+      final trimmed = value.trim();
+      if (trimmed.isEmpty) return null;
+      return int.tryParse(trimmed);
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Text(isEdit ? 'Modifier la règle' : 'Ajouter une règle'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: selectedType,
+                  decoration: const InputDecoration(
+                    labelText: 'Type d\'entretien',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: maintenanceTypes
+                      .map(
+                        (type) =>
+                            DropdownMenuItem(value: type, child: Text(type)),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setDialogState(() => selectedType = value);
+                  },
+                ),
+                if (selectedType == 'Autre') ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: customTypeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Type personnalisé',
+                      hintText: 'Ex: courroie, batterie...',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                TextField(
+                  controller: intervalKmController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Intervalle km',
+                    hintText: 'Ex: 10000',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: intervalDaysController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Intervalle jours',
+                    hintText: 'Laisser vide si non utilisé',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: warningKmController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Alerte avant km',
+                    hintText: 'Ex: 1000',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: warningDaysController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Alerte avant jours',
+                    hintText: 'Ex: 15',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Règle active'),
+                  value: enabled,
+                  onChanged: (value) {
+                    setDialogState(() => enabled = value);
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Annuler'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final type = selectedType == 'Autre'
+                    ? customTypeController.text.trim()
+                    : frenchTypeToStored[selectedType] ?? selectedType;
+                if (type.isEmpty) {
+                  _showSnackBar('Le type d\'entretien est obligatoire.');
+                  return;
+                }
+
+                Navigator.of(context).pop();
+                try {
+                  setState(() => _isBusy = true);
+                  await _maintenanceRuleService.saveRule(
+                    id: rule?.id,
+                    tenantId: _tenantId,
+                    maintenanceType: type,
+                    intervalKm: parseOptionalInt(intervalKmController.text),
+                    intervalDays: parseOptionalInt(intervalDaysController.text),
+                    warningBeforeKm: parseOptionalInt(warningKmController.text),
+                    warningBeforeDays: parseOptionalInt(
+                      warningDaysController.text,
+                    ),
+                    enabled: enabled,
+                  );
+                  await _loadData();
+                  _showSnackBar('Règle d\'entretien enregistrée.');
+                } catch (e) {
+                  _showSnackBar('Erreur règle d\'entretien: $e');
+                } finally {
+                  if (mounted) {
+                    setState(() => _isBusy = false);
+                  }
+                }
+              },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteMaintenanceRule(MaintenanceRule rule) async {
+    final confirmed = await _showDeleteConfirmation(
+      title: 'Supprimer cette règle ?',
+      message: rule.maintenanceType,
+    );
+    if (!confirmed) return;
+
+    try {
+      setState(() => _isBusy = true);
+      await _maintenanceRuleService.deleteRule(rule.id);
+      await _loadData();
+      _showSnackBar('Règle supprimée.');
+    } catch (e) {
+      _showSnackBar('Erreur suppression règle: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isBusy = false);
+      }
+    }
+  }
+
+  String _formatMaintenanceRuleType(String type) {
+    const labels = {
+      'oil change': 'Vidange',
+      'brake pad replacement': 'Plaquettes de Frein',
+      'spark plugs': 'Bougies',
+      'tires': 'Pneus',
+      'brake fluid': 'Liquide de Frein',
+      'urgent': 'Urgent',
+    };
+    return labels[type.trim().toLowerCase()] ?? type;
+  }
+
   Future<bool> _showDeleteConfirmation({
     required String title,
     required String message,
@@ -515,17 +747,15 @@ class _ManagerSettingsScreenOptimizedState
 
   void _showSnackBar(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (_tenantId.isEmpty) {
@@ -562,6 +792,8 @@ class _ManagerSettingsScreenOptimizedState
                 _buildDriversSection(),
                 const SizedBox(height: 16),
                 _buildAmbulancesSection(),
+                const SizedBox(height: 16),
+                _buildMaintenanceRulesSection(),
                 const SizedBox(height: 24),
               ],
             ),
@@ -569,9 +801,7 @@ class _ManagerSettingsScreenOptimizedState
           if (_isBusy)
             Container(
               color: Colors.black.withValues(alpha: 0.08),
-              child: const Center(
-                child: CircularProgressIndicator(),
-              ),
+              child: const Center(child: CircularProgressIndicator()),
             ),
         ],
       ),
@@ -655,9 +885,7 @@ class _ManagerSettingsScreenOptimizedState
         label: const Text('Ajouter'),
       ),
       child: _drivers.isEmpty
-          ? const _EmptySectionMessage(
-              message: 'Aucun chauffeur trouvé.',
-            )
+          ? const _EmptySectionMessage(message: 'Aucun chauffeur trouvé.')
           : Column(
               children: _drivers
                   .map(
@@ -684,9 +912,7 @@ class _ManagerSettingsScreenOptimizedState
         label: const Text('Ajouter'),
       ),
       child: _ambulances.isEmpty
-          ? const _EmptySectionMessage(
-              message: 'Aucune ambulance trouvée.',
-            )
+          ? const _EmptySectionMessage(message: 'Aucune ambulance trouvée.')
           : Column(
               children: _ambulances
                   .map(
@@ -703,6 +929,53 @@ class _ManagerSettingsScreenOptimizedState
                     ),
                   )
                   .toList(),
+            ),
+    );
+  }
+
+  Widget _buildMaintenanceRulesSection() {
+    return _buildSectionCard(
+      title: 'Règles d\'entretien',
+      subtitle:
+          'Définissez les prévisions par type: km, jours et seuils d\'alerte.',
+      trailing: ElevatedButton.icon(
+        onPressed: () => _showMaintenanceRuleDialog(),
+        icon: const Icon(Icons.rule_folder_outlined),
+        label: const Text('Ajouter'),
+      ),
+      child: _maintenanceRules.isEmpty
+          ? const _EmptySectionMessage(
+              message:
+                  'Aucune règle définie. Un type sans règle n\'a pas de condition.',
+            )
+          : Column(
+              children: _maintenanceRules.map((rule) {
+                final intervals = <String>[
+                  if (rule.intervalKm != null) '${rule.intervalKm} km',
+                  if (rule.intervalDays != null) '${rule.intervalDays} jours',
+                ];
+                final warnings = <String>[
+                  if (rule.warningBeforeKm != null)
+                    'alerte ${rule.warningBeforeKm} km',
+                  if (rule.warningBeforeDays != null)
+                    'alerte ${rule.warningBeforeDays} jours',
+                ];
+                final subtitle = intervals.isEmpty
+                    ? 'Aucune condition'
+                    : intervals.join(' / ');
+                final extra = [
+                  if (warnings.isNotEmpty) warnings.join(' / '),
+                  rule.enabled ? 'Active' : 'Inactive',
+                ].join(' • ');
+
+                return _SimpleListTileCard(
+                  title: _formatMaintenanceRuleType(rule.maintenanceType),
+                  subtitle: subtitle,
+                  extra: extra,
+                  onEdit: () => _showMaintenanceRuleDialog(rule: rule),
+                  onDelete: () => _deleteMaintenanceRule(rule),
+                );
+              }).toList(),
             ),
     );
   }
@@ -756,10 +1029,7 @@ class _ManagerSettingsScreenOptimizedState
                   ],
                 ),
               ),
-              if (trailing != null) ...[
-                const SizedBox(width: 12),
-                trailing,
-              ],
+              if (trailing != null) ...[const SizedBox(width: 12), trailing],
             ],
           ),
           const SizedBox(height: 16),
@@ -832,10 +1102,7 @@ class _SimpleListTileCard extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined),
-          ),
+          IconButton(onPressed: onEdit, icon: const Icon(Icons.edit_outlined)),
           IconButton(
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
@@ -865,10 +1132,7 @@ class _EmptySectionMessage extends StatelessWidget {
       child: Text(
         message,
         textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: AppColors.textSecondary,
-          fontSize: 14,
-        ),
+        style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
       ),
     );
   }

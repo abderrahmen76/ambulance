@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 import '../models/user_model.dart';
 import '../models/mission_model.dart';
 import '../models/ambulance_model.dart';
+import '../models/maintenance_record_model.dart';
+import '../models/fuel_card_model.dart';
 import '../services/api_client.dart';
 import '../services/pdf_service.dart';
 import '../config/constants.dart';
@@ -11,10 +16,8 @@ import '../utils/responsive.dart';
 class ManagerHistoriqueScreenContent extends StatefulWidget {
   final User user;
 
-  const ManagerHistoriqueScreenContent({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerHistoriqueScreenContent({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerHistoriqueScreenContent> createState() =>
@@ -22,10 +25,13 @@ class ManagerHistoriqueScreenContent extends StatefulWidget {
 }
 
 class _ManagerHistoriqueScreenContentState
-    extends State<ManagerHistoriqueScreenContent> with WidgetsBindingObserver {
+    extends State<ManagerHistoriqueScreenContent>
+    with WidgetsBindingObserver {
   final _apiClient = ApiClient();
   late Future<List<Mission>> _missionsFuture;
   late Future<List<Ambulance>> _ambulancesFuture;
+  late Future<List<MaintenanceRecord>> _maintenanceRecordsFuture;
+  late Future<List<FuelCard>> _fuelCardsFuture;
 
   // Filter parameters
   DateTime? _startDate;
@@ -34,15 +40,17 @@ class _ManagerHistoriqueScreenContentState
   String? _selectedDriver;
   String? _selectedStatus;
   String? _selectedPaymentType;
+  String? _selectedMissionSource;
   List<Ambulance> _ambulances = [];
   Set<String> _drivers = {};
   final List<String> _statuses = [
     'completed',
     'active',
     'cancelled',
-    'pending'
+    'pending',
   ];
   final List<String> _paymentTypes = ['cash', 'charge'];
+  final List<String> _missionSources = ['manager', 'clinic', 'patient'];
 
   @override
   void initState() {
@@ -55,7 +63,8 @@ class _ManagerHistoriqueScreenContentState
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         debugPrint(
-            '[ManagerHistoriqueScreenContent] Post-frame callback: reloading historique data');
+          '[ManagerHistoriqueScreenContent] Post-frame callback: reloading historique data',
+        );
         _reloadHistoriqueData();
       }
     });
@@ -71,7 +80,8 @@ class _ManagerHistoriqueScreenContentState
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint(
-          '[ManagerHistoriqueScreen] App resumed, reloading historique...');
+        '[ManagerHistoriqueScreen] App resumed, reloading historique...',
+      );
       _reloadHistoriqueData();
     }
   }
@@ -79,6 +89,8 @@ class _ManagerHistoriqueScreenContentState
   void _reloadHistoriqueData() {
     _missionsFuture = _getAllMissions();
     _ambulancesFuture = _getAllAmbulances();
+    _maintenanceRecordsFuture = _getAllMaintenanceRecords();
+    _fuelCardsFuture = _getAllFuelCards();
     _loadFilterData();
   }
 
@@ -119,6 +131,108 @@ class _ManagerHistoriqueScreenContentState
     }
   }
 
+  Future<List<MaintenanceRecord>> _getAllMaintenanceRecords() async {
+    try {
+      final response = await _apiClient.get(
+        SupabaseConfig.maintenanceRecordsTable,
+      );
+      return response.map((json) => MaintenanceRecord.fromJson(json)).toList();
+    } catch (e) {
+      print('Error loading maintenance records: $e');
+      return [];
+    }
+  }
+
+  Future<List<FuelCard>> _getAllFuelCards() async {
+    try {
+      final response = await _apiClient.get(SupabaseConfig.fuelCardsTable);
+      return response.map((json) => FuelCard.fromJson(json)).toList();
+    } catch (e) {
+      print('Error loading fuel cards: $e');
+      return [];
+    }
+  }
+
+  String _missionSource(Mission mission) {
+    if (mission.isGuestPatientMission) return 'patient';
+    final clinicTenantId = mission.clinicTenantId?.trim();
+    if (clinicTenantId != null && clinicTenantId.isNotEmpty) return 'clinic';
+    return 'manager';
+  }
+
+  String _missionSourceLabel(String source) {
+    switch (source) {
+      case 'clinic':
+        return 'Clinic';
+      case 'patient':
+        return 'Patient';
+      case 'manager':
+      default:
+        return 'Manager';
+    }
+  }
+
+  IconData _missionSourceIcon(String source) {
+    switch (source) {
+      case 'clinic':
+        return Icons.local_hospital;
+      case 'patient':
+        return Icons.accessibility_new;
+      case 'manager':
+      default:
+        return Icons.admin_panel_settings;
+    }
+  }
+
+  bool _matchesFinanceFilters({
+    required String ambulanceId,
+    required String date,
+    String? driverName,
+  }) {
+    final recordDate = DateTime.tryParse(date);
+    if (recordDate == null) return false;
+
+    if (_startDate != null && recordDate.isBefore(_startDate!)) {
+      return false;
+    }
+    if (_endDate != null &&
+        recordDate.isAfter(_endDate!.add(const Duration(days: 1)))) {
+      return false;
+    }
+    if (_selectedAmbulance != null && ambulanceId != _selectedAmbulance) {
+      return false;
+    }
+    if (_selectedDriver != null && driverName != _selectedDriver) {
+      return false;
+    }
+    return true;
+  }
+
+  List<MaintenanceRecord> _filterMaintenanceRecords(
+    List<MaintenanceRecord> records,
+  ) {
+    return records.where((record) {
+      return _matchesFinanceFilters(
+        ambulanceId: record.ambulanceId,
+        date: record.date,
+        driverName: record.driverName,
+      );
+    }).toList();
+  }
+
+  List<FuelCard> _filterFuelCards(List<FuelCard> cards) {
+    return cards.where((card) {
+      final isRefill = card.driverName.trim().toLowerCase() == 'refill';
+      if (isRefill) return false;
+
+      return _matchesFinanceFilters(
+        ambulanceId: card.ambulanceId,
+        date: card.date,
+        driverName: card.driverName,
+      );
+    }).toList();
+  }
+
   List<Mission> _filterMissions(List<Mission> missions) {
     return missions.where((mission) {
       try {
@@ -153,6 +267,12 @@ class _ManagerHistoriqueScreenContentState
         // Filter by payment type
         if (_selectedPaymentType != null &&
             mission.paymentType != _selectedPaymentType) {
+          return false;
+        }
+
+        // Filter by mission source
+        if (_selectedMissionSource != null &&
+            _missionSource(mission) != _selectedMissionSource) {
           return false;
         }
 
@@ -215,6 +335,167 @@ class _ManagerHistoriqueScreenContentState
     }
   }
 
+  String _exportText(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? 'N/A' : text;
+  }
+
+  String _ambulanceLabel(String? ambulanceId) {
+    if (ambulanceId == null || ambulanceId.isEmpty) return 'N/A';
+    for (final ambulance in _ambulances) {
+      if (ambulance.id == ambulanceId) {
+        return ambulance.ambulanceNumber;
+      }
+    }
+    return ambulanceId;
+  }
+
+  String _patientLabel(Mission mission) {
+    final fullName = [
+      mission.patientFirstName,
+      mission.patientLastName,
+    ].where((part) => part != null && part.trim().isNotEmpty).join(' ');
+    if (fullName.trim().isNotEmpty) return fullName;
+    return mission.patientName ?? 'N/A';
+  }
+
+  List<String> _missionExportRow(Mission mission) {
+    final date = DateTime.tryParse(mission.missionDate);
+    return [
+      mission.missionNumber,
+      date != null
+          ? DateFormat('dd/MM/yyyy HH:mm').format(date)
+          : mission.missionDate,
+      _translateStatus(mission.status),
+      _ambulanceLabel(mission.ambulanceId),
+      _exportText(mission.driverName),
+      _exportText(mission.infirmierName),
+      _patientLabel(mission),
+      _exportText(mission.patientPhone),
+      _exportText(mission.fromLocation),
+      _exportText(mission.toLocation),
+      _exportText(mission.priority),
+      _exportText(mission.missionPrice),
+      mission.paymentType == null
+          ? 'N/A'
+          : _getPaymentTypeLabel(mission.paymentType!),
+      mission.isPaid == true ? 'Oui' : 'Non',
+      _exportText(mission.guarantee),
+      _exportText(mission.startTime),
+      _exportText(mission.endTime),
+    ];
+  }
+
+  Future<void> _exportFilteredMissionsToPdf(List<Mission> missions) async {
+    if (missions.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Aucune mission a exporter'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    try {
+      final pdf = pw.Document();
+      final generatedAt = DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now());
+      final headers = [
+        'Mission',
+        'Date',
+        'Statut',
+        'Ambulance',
+        'Conducteur',
+        'Infirmier',
+        'Patient',
+        'Tel',
+        'Depart',
+        'Destination',
+        'Priorite',
+        'Prix',
+        'Paiement',
+        'Paye',
+        'Garantie',
+        'Debut',
+        'Fin',
+      ];
+
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4.landscape,
+          margin: const pw.EdgeInsets.all(18),
+          build: (context) => [
+            pw.Text(
+              'Historique des Missions',
+              style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text('Genere le: $generatedAt'),
+            pw.Text('Missions filtrees: ${missions.length}'),
+            pw.SizedBox(height: 12),
+            pw.Table.fromTextArray(
+              headers: headers,
+              data: missions.map(_missionExportRow).toList(),
+              headerStyle: pw.TextStyle(
+                color: PdfColors.white,
+                fontSize: 7,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              headerDecoration: const pw.BoxDecoration(color: PdfColors.red),
+              cellStyle: const pw.TextStyle(fontSize: 6),
+              cellAlignment: pw.Alignment.centerLeft,
+              headerAlignment: pw.Alignment.centerLeft,
+              border: pw.TableBorder.all(color: PdfColors.grey600, width: 0.4),
+              cellPadding: const pw.EdgeInsets.all(3),
+            ),
+          ],
+        ),
+      );
+
+      final bytes = await pdf.save();
+      final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'historique_missions_$timestamp.pdf',
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('PDF genere avec succes'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur export PDF: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Widget _buildPdfExportButton(List<Mission> missions) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: () => _exportFilteredMissionsToPdf(missions),
+        icon: const Icon(Icons.picture_as_pdf),
+        label: Text('PDF (${missions.length})'),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.red,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _selectDateRange() async {
     final picked = await showDateRangePicker(
       context: context,
@@ -241,6 +522,8 @@ class _ManagerHistoriqueScreenContentState
         setState(() {
           _missionsFuture = _getAllMissions();
           _ambulancesFuture = _getAllAmbulances();
+          _maintenanceRecordsFuture = _getAllMaintenanceRecords();
+          _fuelCardsFuture = _getAllFuelCards();
         });
         await _loadFilterData();
       },
@@ -256,8 +539,8 @@ class _ManagerHistoriqueScreenContentState
                   Text(
                     'Historique des Missions',
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   SizedBox(height: responsive.spacingLarge),
 
@@ -302,11 +585,7 @@ class _ManagerHistoriqueScreenContentState
                       padding: const EdgeInsets.symmetric(vertical: 48),
                       child: Column(
                         children: [
-                          Icon(
-                            Icons.inbox,
-                            size: 64,
-                            color: Colors.grey[300],
-                          ),
+                          Icon(Icons.inbox, size: 64, color: Colors.grey[300]),
                           const SizedBox(height: 16),
                           Text(
                             'Aucune mission trouvée',
@@ -325,11 +604,40 @@ class _ManagerHistoriqueScreenContentState
               return SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.symmetric(
-                      horizontal: context.responsive.spacingLarge),
+                    horizontal: context.responsive.spacingLarge,
+                  ),
                   child: Column(
                     children: [
                       // Summary
-                      _buildSummaryPanel(filteredMissions, _selectedAmbulance),
+                      FutureBuilder<List<dynamic>>(
+                        future: Future.wait<dynamic>([
+                          _maintenanceRecordsFuture,
+                          _fuelCardsFuture,
+                        ]),
+                        builder: (context, financeSnapshot) {
+                          final maintenanceRecords = financeSnapshot.hasData
+                              ? financeSnapshot.data![0]
+                                    as List<MaintenanceRecord>
+                              : <MaintenanceRecord>[];
+                          final fuelCards = financeSnapshot.hasData
+                              ? financeSnapshot.data![1] as List<FuelCard>
+                              : <FuelCard>[];
+
+                          return _buildSummaryPanel(
+                            filteredMissions,
+                            _selectedAmbulance,
+                            maintenanceRecords: _filterMaintenanceRecords(
+                              maintenanceRecords,
+                            ),
+                            fuelCards: _filterFuelCards(fuelCards),
+                            isFinanceLoading:
+                                financeSnapshot.connectionState ==
+                                ConnectionState.waiting,
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      _buildPdfExportButton(filteredMissions),
                       const SizedBox(height: 20),
 
                       // Missions List
@@ -388,8 +696,11 @@ class _ManagerHistoriqueScreenContentState
               ),
               child: Row(
                 children: [
-                  Icon(Icons.calendar_today,
-                      color: AppColors.primary, size: 20),
+                  Icon(
+                    Icons.calendar_today,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
                   SizedBox(width: context.responsive.spacingMedium),
                   Expanded(
                     child: Text(
@@ -412,8 +723,11 @@ class _ManagerHistoriqueScreenContentState
                           _endDate = null;
                         });
                       },
-                      child:
-                          Icon(Icons.clear, color: Colors.grey[400], size: 18),
+                      child: Icon(
+                        Icons.clear,
+                        color: Colors.grey[400],
+                        size: 18,
+                      ),
                     ),
                 ],
               ),
@@ -426,10 +740,12 @@ class _ManagerHistoriqueScreenContentState
             value: _selectedAmbulance,
             hint: const Text('Sélectionner une ambulance'),
             items: _ambulances
-                .map((a) => DropdownMenuItem(
-                      value: a.id,
-                      child: Text(a.ambulanceNumber),
-                    ))
+                .map(
+                  (a) => DropdownMenuItem(
+                    value: a.id,
+                    child: Text(a.ambulanceNumber),
+                  ),
+                )
                 .toList(),
             onChanged: (value) {
               setState(() {
@@ -438,12 +754,17 @@ class _ManagerHistoriqueScreenContentState
             },
             decoration: InputDecoration(
               contentPadding: EdgeInsets.symmetric(
-                  horizontal: context.responsive.spacingMedium,
-                  vertical: context.responsive.spacingSmall),
+                horizontal: context.responsive.spacingMedium,
+                vertical: context.responsive.spacingSmall,
+              ),
               border: OutlineInputBorder(
-                  borderRadius: context.responsive.radiusMedium),
-              prefixIcon: Icon(Icons.local_shipping,
-                  color: AppColors.primary, size: 20),
+                borderRadius: context.responsive.radiusMedium,
+              ),
+              prefixIcon: Icon(
+                Icons.local_shipping,
+                color: AppColors.primary,
+                size: 20,
+              ),
             ),
           ),
           SizedBox(height: context.responsive.spacingMedium),
@@ -453,10 +774,10 @@ class _ManagerHistoriqueScreenContentState
             value: _selectedDriver,
             hint: const Text('Sélectionner un ambulancier'),
             items: _drivers
-                .map((driver) => DropdownMenuItem(
-                      value: driver,
-                      child: Text(driver),
-                    ))
+                .map(
+                  (driver) =>
+                      DropdownMenuItem(value: driver, child: Text(driver)),
+                )
                 .toList(),
             onChanged: (value) {
               setState(() {
@@ -464,12 +785,18 @@ class _ManagerHistoriqueScreenContentState
               });
             },
             decoration: InputDecoration(
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-              prefixIcon:
-                  Icon(Icons.person, color: AppColors.primary, size: 20),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              prefixIcon: Icon(
+                Icons.person,
+                color: AppColors.primary,
+                size: 20,
+              ),
             ),
           ),
           const SizedBox(height: 12),
@@ -479,23 +806,25 @@ class _ManagerHistoriqueScreenContentState
             value: _selectedStatus,
             hint: const Text('Sélectionner un statut'),
             items: _statuses
-                .map((status) => DropdownMenuItem(
-                      value: status,
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 12,
-                            height: 12,
-                            decoration: BoxDecoration(
-                              color: _getStatusColor(status),
-                              shape: BoxShape.circle,
-                            ),
+                .map(
+                  (status) => DropdownMenuItem(
+                    value: status,
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: _getStatusColor(status),
+                            shape: BoxShape.circle,
                           ),
-                          const SizedBox(width: 8),
-                          Text(_translateStatus(status)),
-                        ],
-                      ),
-                    ))
+                        ),
+                        const SizedBox(width: 8),
+                        Text(_translateStatus(status)),
+                      ],
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (value) {
               setState(() {
@@ -504,12 +833,17 @@ class _ManagerHistoriqueScreenContentState
             },
             decoration: InputDecoration(
               contentPadding: EdgeInsets.symmetric(
-                  horizontal: context.responsive.spacingMedium,
-                  vertical: context.responsive.spacingSmall),
+                horizontal: context.responsive.spacingMedium,
+                vertical: context.responsive.spacingSmall,
+              ),
               border: OutlineInputBorder(
-                  borderRadius: context.responsive.radiusMedium),
-              prefixIcon:
-                  Icon(Icons.check_circle, color: AppColors.primary, size: 20),
+                borderRadius: context.responsive.radiusMedium,
+              ),
+              prefixIcon: Icon(
+                Icons.check_circle,
+                color: AppColors.primary,
+                size: 20,
+              ),
             ),
           ),
           SizedBox(height: context.responsive.spacingMedium),
@@ -519,24 +853,26 @@ class _ManagerHistoriqueScreenContentState
             value: _selectedPaymentType,
             hint: const Text('Mode de paiement'),
             items: _paymentTypes
-                .map((paymentType) => DropdownMenuItem(
-                      value: paymentType,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _getPaymentTypeIcon(paymentType),
-                            size: 16,
-                            color: AppColors.primary,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            _getPaymentTypeLabel(paymentType),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ))
+                .map(
+                  (paymentType) => DropdownMenuItem(
+                    value: paymentType,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _getPaymentTypeIcon(paymentType),
+                          size: 16,
+                          color: AppColors.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          _getPaymentTypeLabel(paymentType),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
                 .toList(),
             onChanged: (value) {
               setState(() {
@@ -545,21 +881,72 @@ class _ManagerHistoriqueScreenContentState
             },
             decoration: InputDecoration(
               contentPadding: EdgeInsets.symmetric(
-                  horizontal: context.responsive.spacingMedium,
-                  vertical: context.responsive.spacingSmall),
+                horizontal: context.responsive.spacingMedium,
+                vertical: context.responsive.spacingSmall,
+              ),
               border: OutlineInputBorder(
-                  borderRadius: context.responsive.radiusMedium),
-              prefixIcon:
-                  Icon(Icons.payment, color: AppColors.primary, size: 20),
+                borderRadius: context.responsive.radiusMedium,
+              ),
+              prefixIcon: Icon(
+                Icons.payment,
+                color: AppColors.primary,
+                size: 20,
+              ),
             ),
           ),
 
+          SizedBox(height: context.responsive.spacingMedium),
+
+          // Mission Source Filter
+          DropdownButtonFormField<String>(
+            value: _selectedMissionSource,
+            hint: const Text('Source mission'),
+            items: _missionSources
+                .map(
+                  (source) => DropdownMenuItem(
+                    value: source,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _missionSourceIcon(source),
+                          size: 16,
+                          color: AppColors.primary,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(_missionSourceLabel(source)),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              setState(() {
+                _selectedMissionSource = value;
+              });
+            },
+            decoration: InputDecoration(
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: context.responsive.spacingMedium,
+                vertical: context.responsive.spacingSmall,
+              ),
+              border: OutlineInputBorder(
+                borderRadius: context.responsive.radiusMedium,
+              ),
+              prefixIcon: Icon(
+                Icons.source,
+                color: AppColors.primary,
+                size: 20,
+              ),
+            ),
+          ),
           // Clear Filters Button
           if (_startDate != null ||
               _selectedAmbulance != null ||
               _selectedDriver != null ||
               _selectedStatus != null ||
-              _selectedPaymentType != null)
+              _selectedPaymentType != null ||
+              _selectedMissionSource != null)
             Padding(
               padding: EdgeInsets.only(top: context.responsive.spacingMedium),
               child: SizedBox(
@@ -573,6 +960,7 @@ class _ManagerHistoriqueScreenContentState
                       _selectedDriver = null;
                       _selectedStatus = null;
                       _selectedPaymentType = null;
+                      _selectedMissionSource = null;
                     });
                   },
                   child: const Text('Réinitialiser les filtres'),
@@ -585,7 +973,12 @@ class _ManagerHistoriqueScreenContentState
   }
 
   Widget _buildSummaryPanel(
-      List<Mission> missions, String? selectedAmbulanceId) {
+    List<Mission> missions,
+    String? selectedAmbulanceId, {
+    required List<MaintenanceRecord> maintenanceRecords,
+    required List<FuelCard> fuelCards,
+    required bool isFinanceLoading,
+  }) {
     final responsive = context.responsive;
     final completed = missions.where((m) => m.status == 'completed').length;
     final active = missions.where((m) => m.status == 'active').length;
@@ -597,10 +990,7 @@ class _ManagerHistoriqueScreenContentState
       try {
         final ambulance = _ambulances.firstWhere(
           (a) => a.id == selectedAmbulanceId,
-          orElse: () => Ambulance(
-            id: '',
-            ambulanceNumber: 'N/A',
-          ),
+          orElse: () => Ambulance(id: '', ambulanceNumber: 'N/A'),
         );
         selectedAmbulanceName = ambulance.ambulanceNumber;
       } catch (e) {
@@ -610,8 +1000,9 @@ class _ManagerHistoriqueScreenContentState
 
     // Calculate performance metrics for selected ambulance
     double totalEarnings = 0;
-    final completedMissions =
-        missions.where((m) => m.status == 'completed').toList();
+    final completedMissions = missions
+        .where((m) => m.status == 'completed')
+        .toList();
     for (var mission in completedMissions) {
       try {
         final price = double.tryParse(mission.missionPrice ?? '0') ?? 0;
@@ -623,6 +1014,14 @@ class _ManagerHistoriqueScreenContentState
     final avgEarnings = completedMissions.isNotEmpty
         ? totalEarnings / completedMissions.length
         : 0;
+    final maintenanceTotal = maintenanceRecords.fold<double>(
+      0,
+      (sum, record) => sum + (record.pricePerPiece ?? 0),
+    );
+    final fuelTotal = fuelCards.fold<double>(
+      0,
+      (sum, card) => sum + card.soldesPaid,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -685,7 +1084,7 @@ class _ManagerHistoriqueScreenContentState
             gradient: LinearGradient(
               colors: [
                 AppColors.primary.withOpacity(0.1),
-                AppColors.primary.withOpacity(0.05)
+                AppColors.primary.withOpacity(0.05),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -697,13 +1096,28 @@ class _ManagerHistoriqueScreenContentState
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildSummaryStat(
-                  'Total', missions.length.toString(), Colors.blue),
+                'Total',
+                missions.length.toString(),
+                Colors.blue,
+              ),
               _buildSummaryStat(
-                  'Complétées', completed.toString(), Colors.green),
+                'Complétées',
+                completed.toString(),
+                Colors.green,
+              ),
               _buildSummaryStat('Actives', active.toString(), Colors.orange),
               _buildSummaryStat('Annulées', canceled.toString(), Colors.red),
             ],
           ),
+        ),
+        SizedBox(height: responsive.spacingMedium),
+        _buildSoldePayeCard(
+          maintenanceTotal: maintenanceTotal,
+          fuelTotal: fuelTotal,
+          maintenanceCount: maintenanceRecords.length,
+          fuelCount: fuelCards.length,
+          isLoading: isFinanceLoading,
+          responsive: responsive,
         ),
         // Performance/Earnings section - always visible
         SizedBox(height: responsive.spacingMedium),
@@ -778,6 +1192,146 @@ class _ManagerHistoriqueScreenContentState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildSoldePayeCard({
+    required double maintenanceTotal,
+    required double fuelTotal,
+    required int maintenanceCount,
+    required int fuelCount,
+    required bool isLoading,
+    required dynamic responsive,
+  }) {
+    final total = maintenanceTotal + fuelTotal;
+
+    return Container(
+      width: double.infinity,
+      padding: responsive.paddingMedium,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.teal.withOpacity(0.12),
+            Colors.blueGrey.withOpacity(0.06),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: responsive.radiusLarge,
+        border: Border.all(color: Colors.teal.withOpacity(0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.account_balance_wallet, color: Colors.teal[700]),
+              SizedBox(width: responsive.spacingSmall),
+              Text(
+                'SOLDE PAYE',
+                style: TextStyle(
+                  fontSize: responsive.fontSizeSmall,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey[700],
+                  letterSpacing: 0.5,
+                ),
+              ),
+              if (isLoading) ...[
+                const Spacer(),
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.teal[700],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          SizedBox(height: responsive.spacingSmall),
+          Text(
+            '${total.toStringAsFixed(2)} DT',
+            style: TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.bold,
+              color: Colors.teal[800],
+            ),
+          ),
+          SizedBox(height: responsive.spacingMedium),
+          Row(
+            children: [
+              Expanded(
+                child: _buildSoldePayeHalf(
+                  label: 'Maintenance records',
+                  value: maintenanceTotal,
+                  count: maintenanceCount,
+                  icon: Icons.build,
+                  color: Colors.deepOrange,
+                  responsive: responsive,
+                ),
+              ),
+              SizedBox(width: responsive.spacingMedium),
+              Expanded(
+                child: _buildSoldePayeHalf(
+                  label: 'Fuel cards',
+                  value: fuelTotal,
+                  count: fuelCount,
+                  icon: Icons.local_gas_station,
+                  color: Colors.indigo,
+                  responsive: responsive,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSoldePayeHalf({
+    required String label,
+    required double value,
+    required int count,
+    required IconData icon,
+    required Color color,
+    required dynamic responsive,
+  }) {
+    return Container(
+      padding: responsive.paddingMedium,
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.78),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 22),
+          SizedBox(height: responsive.spacingSmall),
+          Text(
+            '${value.toStringAsFixed(2)} DT',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          SizedBox(height: responsive.spacingSmall),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: responsive.fontSizeSmall,
+              color: Colors.grey[700],
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text(
+            '$count operation${count > 1 ? 's' : ''}',
+            style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+          ),
+        ],
+      ),
     );
   }
 
@@ -887,8 +1441,10 @@ class _ManagerHistoriqueScreenContentState
                   ),
                 ),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
@@ -908,10 +1464,7 @@ class _ManagerHistoriqueScreenContentState
             const SizedBox(height: 6),
             Text(
               DateFormat('dd/MM/yyyy HH:mm').format(missionDate),
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey[600],
-              ),
+              style: TextStyle(fontSize: 11, color: Colors.grey[600]),
             ),
             const SizedBox(height: 8),
             Row(
@@ -921,10 +1474,7 @@ class _ManagerHistoriqueScreenContentState
                 Expanded(
                   child: Text(
                     '${mission.fromLocation} → ${mission.toLocation}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -946,8 +1496,9 @@ class _ManagerHistoriqueScreenContentState
       context: context,
       builder: (context) {
         return AlertDialog(
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -963,8 +1514,10 @@ class _ManagerHistoriqueScreenContentState
                   ),
                   const SizedBox(width: 8),
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: statusColor.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(6),
@@ -973,9 +1526,10 @@ class _ManagerHistoriqueScreenContentState
                     child: Text(
                       statusText,
                       style: TextStyle(
-                          fontSize: 11,
-                          color: statusColor,
-                          fontWeight: FontWeight.w700),
+                        fontSize: 11,
+                        color: statusColor,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ],
@@ -988,12 +1542,14 @@ class _ManagerHistoriqueScreenContentState
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                    'Date:  ${DateFormat('dd/MM/yyyy HH:mm').format(missionDate)}'),
+                  'Date:  ${DateFormat('dd/MM/yyyy HH:mm').format(missionDate)}',
+                ),
                 const SizedBox(height: 8),
                 Text('Ambulance: ${mission.ambulanceId}'),
                 Text('Conducteur: ${mission.driverName ?? 'N/A'}'),
                 Text(
-                    'Patient: ${(mission.patientFirstName ?? '') + ' ' + (mission.patientLastName ?? '')}'),
+                  'Patient: ${(mission.patientFirstName ?? '') + ' ' + (mission.patientLastName ?? '')}',
+                ),
                 Text('Priorité: ${mission.priority ?? 'N/A'}'),
                 Text('De: ${mission.fromLocation}'),
                 Text('À: ${mission.toLocation}'),
@@ -1001,7 +1557,8 @@ class _ManagerHistoriqueScreenContentState
                   Text('Prix: ${mission.missionPrice} DT'),
                 if (mission.paymentType != null)
                   Text(
-                      'Paiement: ${_getPaymentTypeLabel(mission.paymentType!)}'),
+                    'Paiement: ${_getPaymentTypeLabel(mission.paymentType!)}',
+                  ),
                 if (mission.status != null) Text('Statut: $statusText'),
                 // Add more fields as needed
               ],
@@ -1032,7 +1589,8 @@ class _ManagerHistoriqueScreenContentState
                     ScaffoldMessenger.of(this.context).showSnackBar(
                       SnackBar(
                         content: Text(
-                            'Erreur lors de la génération du PDF: \\${e.toString()}'),
+                          'Erreur lors de la génération du PDF: \\${e.toString()}',
+                        ),
                         backgroundColor: Colors.red,
                         duration: const Duration(seconds: 3),
                       ),
@@ -1064,7 +1622,8 @@ class _ManagerHistoriqueScreenContentState
                     ScaffoldMessenger.of(this.context).showSnackBar(
                       SnackBar(
                         content: Text(
-                            'Erreur lors de la génération de la facture: \\${e.toString()}'),
+                          'Erreur lors de la génération de la facture: \\${e.toString()}',
+                        ),
                         backgroundColor: Colors.red,
                         duration: const Duration(seconds: 3),
                       ),

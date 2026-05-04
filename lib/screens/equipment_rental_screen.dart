@@ -9,10 +9,7 @@ import '../services/notification_app_service.dart';
 import '../config/constants.dart';
 
 // Base equipment types (fixed options)
-const List<String> baseEquipmentTypes = [
-  'Oxygéne',
-  'Autre',
-];
+const List<String> baseEquipmentTypes = ['Oxygéne', 'Autre'];
 
 class EquipmentRentalScreen extends StatefulWidget {
   final Ambulance ambulance;
@@ -54,7 +51,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
       final staff = await _companyStaffService.getCompanyStaff(tenantId);
       if (!mounted) return;
       setState(() {
-        _companyStaff = staff.where((member) => member.id != widget.user.id).toList();
+        _companyStaff = staff
+            .where((member) => member.id != widget.user.id)
+            .toList();
       });
     } catch (e) {
       debugPrint('Error loading company staff: $e');
@@ -72,10 +71,7 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
       final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
       if (mounted) {
         setState(() {
-          _allEquipmentTypes = [
-            ...baseEquipmentTypes,
-            ...customTypes,
-          ];
+          _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
         });
       }
     } catch (e) {
@@ -85,8 +81,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
 
   Future<void> _loadEquipmentRentals() async {
     try {
-      final rentals = await _rentalService
-          .getAmbulanceEquipmentRentals(widget.ambulance.id);
+      final rentals = await _rentalService.getAmbulanceEquipmentRentals(
+        widget.ambulance.id,
+      );
       if (mounted) {
         setState(() {
           _rentals = rentals;
@@ -161,8 +158,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
   }
 
   void _showReturnDialog(EquipmentRental rental) {
-    final returnDateCtrl =
-        TextEditingController(text: DateTime.now().toString().split(' ')[0]);
+    final returnDateCtrl = TextEditingController(
+      text: DateTime.now().toString().split(' ')[0],
+    );
 
     showDialog(
       context: context,
@@ -207,7 +205,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
             onPressed: () async {
               try {
                 await _rentalService.markAsReturned(
-                    rental.id, returnDateCtrl.text);
+                  rental.id,
+                  returnDateCtrl.text,
+                );
                 if (mounted) {
                   Navigator.pop(dialogContext);
 
@@ -260,14 +260,17 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
 
   void _showEditRentalDialog(EquipmentRental rental) {
     final ambulancierCtrl = TextEditingController(text: rental.ambulancierName);
-    final patientNameCtrl =
-        TextEditingController(text: rental.patientName ?? '');
-    final patientAddressCtrl =
-        TextEditingController(text: rental.patientAddress ?? '');
+    final patientNameCtrl = TextEditingController(
+      text: rental.patientName ?? '',
+    );
+    final patientAddressCtrl = TextEditingController(
+      text: rental.patientAddress ?? '',
+    );
     final costCtrl = TextEditingController(text: rental.cost.toString());
     final notesCtrl = TextEditingController(text: rental.notes ?? '');
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
 
     showDialog(
       context: context,
@@ -280,8 +283,10 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
             children: [
               Text(
                 'Équipement: ${rental.equipmentType}',
-                style:
-                    const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w500,
+                  fontSize: 14,
+                ),
               ),
               const SizedBox(height: 16),
 
@@ -354,8 +359,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
               // Cost
               TextFormField(
                 controller: costCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Coût (TND)',
                   border: OutlineInputBorder(
@@ -434,8 +440,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
   }
 
   void _showEditReturnDateDialog(EquipmentRental rental) {
-    final returnDateCtrl =
-        TextEditingController(text: rental.returnDate?.split(' ')[0] ?? '');
+    final returnDateCtrl = TextEditingController(
+      text: rental.returnDate?.split(' ')[0] ?? '',
+    );
 
     showDialog(
       context: context,
@@ -486,7 +493,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
               try {
                 // Update the rental with new return date
                 await _rentalService.updateReturnDate(
-                    rental.id, returnDateCtrl.text);
+                  rental.id,
+                  returnDateCtrl.text,
+                );
 
                 if (mounted) {
                   Navigator.pop(dialogContext);
@@ -623,8 +632,11 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.medical_services,
-                      size: 64, color: Colors.grey[300]),
+                  Icon(
+                    Icons.medical_services,
+                    size: 64,
+                    color: Colors.grey[300],
+                  ),
                   const SizedBox(height: 16),
                   const Text(
                     'Aucune Location',
@@ -685,13 +697,15 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                       const SizedBox(height: 4),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         decoration: BoxDecoration(
                           color: isSold
                               ? Colors.orange[100]
                               : (isReturned
-                                  ? Colors.grey[200]
-                                  : Colors.green[100]),
+                                    ? Colors.grey[200]
+                                    : Colors.green[100]),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -704,8 +718,8 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                             color: isSold
                                 ? Colors.orange[700]
                                 : (isReturned
-                                    ? Colors.grey[700]
-                                    : Colors.green[700]),
+                                      ? Colors.grey[700]
+                                      : Colors.green[700]),
                           ),
                         ),
                       ),
@@ -715,8 +729,11 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            const Icon(Icons.person,
-                                size: 16, color: Colors.blueGrey),
+                            const Icon(
+                              Icons.person,
+                              size: 16,
+                              color: Colors.blueGrey,
+                            ),
                             const SizedBox(width: 4),
                             Flexible(
                               child: Text(
@@ -803,8 +820,11 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      const Icon(Icons.location_on,
-                          size: 16, color: Colors.redAccent),
+                      const Icon(
+                        Icons.location_on,
+                        size: 16,
+                        color: Colors.redAccent,
+                      ),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
@@ -839,10 +859,7 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                       const SizedBox(width: 4),
                       Text(
                         rental.patientPhoneNumber!,
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.grey[700],
-                        ),
+                        style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                       ),
                     ],
                   ),
@@ -905,10 +922,7 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                   const SizedBox(height: 4),
                   Text(
                     rental.notes!,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[700],
-                    ),
+                    style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                   ),
                 ],
               ),
@@ -992,8 +1006,10 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
     // Initialize rent date to today
     _rentDate = DateTime.now().toString().split(' ')[0];
     // Initialize return date to 3 days later (for rentals)
-    _returnDate =
-        DateTime.now().add(const Duration(days: 3)).toString().split(' ')[0];
+    _returnDate = DateTime.now()
+        .add(const Duration(days: 3))
+        .toString()
+        .split(' ')[0];
     _rentDateController = TextEditingController(text: _rentDate);
     _returnDateController = TextEditingController(text: _returnDate);
     _quantityController = TextEditingController(text: _quantity.toString());
@@ -1005,8 +1021,10 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
         .where((member) => _selectedTeammateIds.contains(member.id))
         .map((member) => member.name)
         .toList();
-    _ambulancierName =
-        <String>[widget.currentUser.name, ...teammateNames].join(', ');
+    _ambulancierName = <String>[
+      widget.currentUser.name,
+      ...teammateNames,
+    ].join(', ');
     _ambulancierController.text = _ambulancierName;
   }
 
@@ -1062,8 +1080,9 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
           notes: _notes.isEmpty ? null : _notes,
           patientName: _patientName.isEmpty ? null : _patientName,
           patientAddress: _patientAddress.isEmpty ? null : _patientAddress,
-          patientPhoneNumber:
-              _patientPhoneNumber.isEmpty ? null : _patientPhoneNumber,
+          patientPhoneNumber: _patientPhoneNumber.isEmpty
+              ? null
+              : _patientPhoneNumber,
           quantity: _quantity,
         );
 
@@ -1104,20 +1123,15 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                   ),
                 ),
                 items: widget.equipmentTypes
-                    .map((item) => DropdownMenuItem(
-                          value: item,
-                          child: Text(item),
-                        ))
+                    .map(
+                      (item) =>
+                          DropdownMenuItem(value: item, child: Text(item)),
+                    )
                     .toList(),
                 onChanged: !_isLoading
                     ? (value) {
                         setState(() {
                           _selectedEquipment = value;
-                          // Reset quantity to 1 if not selecting Oxygéne
-                          if (value != 'Oxygéne') {
-                            _quantity = 1;
-                            _quantityController.text = '1';
-                          }
                         });
                       }
                     : null,
@@ -1249,8 +1263,9 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                   final picked = await showDatePicker(
                     context: context,
                     initialDate: DateTime.parse(_rentDate),
-                    firstDate:
-                        DateTime.now().subtract(const Duration(days: 30)),
+                    firstDate: DateTime.now().subtract(
+                      const Duration(days: 30),
+                    ),
                     lastDate: DateTime.now().add(const Duration(days: 365)),
                   );
                   if (picked != null) {
@@ -1308,37 +1323,35 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                 },
               ),
               const SizedBox(height: 12),
-
-              // Quantity (only for oxygen bottles)
-              if (_selectedEquipment == 'Oxygéne') ...[
-                TextFormField(
-                  controller: _quantityController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Quantité (nombre de bouteilles)',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    hintText: '1',
+              // Quantity
+              TextFormField(
+                controller: _quantityController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Quantité',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  enabled: !_isLoading,
-                  onChanged: (value) =>
-                      setState(() => _quantity = int.tryParse(value) ?? 1),
-                  validator: (value) {
-                    final qty = int.tryParse(value ?? '');
-                    if (qty == null || qty < 1) {
-                      return 'La quantité doit être au moins 1';
-                    }
-                    return null;
-                  },
+                  hintText: '1',
                 ),
-                const SizedBox(height: 12),
-              ],
+                enabled: !_isLoading,
+                onChanged: (value) =>
+                    setState(() => _quantity = int.tryParse(value) ?? 1),
+                validator: (value) {
+                  final qty = int.tryParse(value ?? '');
+                  if (qty == null || qty < 1) {
+                    return 'La quantité doit être au moins 1';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
 
               // Cost
               TextFormField(
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Coût (TND)',
                   border: OutlineInputBorder(
@@ -1449,8 +1462,10 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
         .where((member) => _selectedTeammateIds.contains(member.id))
         .map((member) => member.name)
         .toList();
-    _ambulancierName =
-        <String>[widget.currentUser.name, ...teammateNames].join(', ');
+    _ambulancierName = <String>[
+      widget.currentUser.name,
+      ...teammateNames,
+    ].join(', ');
     _ambulancierController.text = _ambulancierName;
   }
 
@@ -1493,16 +1508,6 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
         // Save custom equipment type if needed
         await _saveCustomEquipmentType(equipmentType);
 
-        // If oxygen is sold, deduct from inventory
-        if (equipmentType.toLowerCase().contains('oxy')) {
-          final prefs = await SharedPreferences.getInstance();
-          int totalOxygen = prefs.getInt('total_oxygen_bottles') ?? 0;
-          int newTotal = (totalOxygen - _quantity).clamp(0, totalOxygen);
-          await prefs.setInt('total_oxygen_bottles', newTotal);
-          debugPrint(
-              '📉 Oxygen inventory updated: $totalOxygen → $newTotal (sold $_quantity)');
-        }
-
         final sale = await widget.rentalService.sellEquipment(
           ambulanceId: widget.ambulanceId,
           equipmentType: equipmentType,
@@ -1512,10 +1517,23 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
           notes: _notes.isEmpty ? null : _notes,
           patientName: _patientName.isEmpty ? null : _patientName,
           patientAddress: _patientAddress.isEmpty ? null : _patientAddress,
-          patientPhoneNumber:
-              _patientPhoneNumber.isEmpty ? null : _patientPhoneNumber,
+          patientPhoneNumber: _patientPhoneNumber.isEmpty
+              ? null
+              : _patientPhoneNumber,
           quantity: _quantity,
         );
+
+        if (equipmentType.toLowerCase().contains('oxy')) {
+          final totalOxygen = await widget.rentalService
+              .getOxygenInventoryCount();
+          final newTotal = (totalOxygen - _quantity)
+              .clamp(0, totalOxygen)
+              .toInt();
+          await widget.rentalService.setOxygenInventoryCount(newTotal);
+          debugPrint(
+            'Oxygen inventory updated: $totalOxygen -> $newTotal (sold $_quantity)',
+          );
+        }
 
         if (mounted) {
           widget.onEquipmentSold(sale);
@@ -1554,20 +1572,15 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                   ),
                 ),
                 items: widget.equipmentTypes
-                    .map((item) => DropdownMenuItem(
-                          value: item,
-                          child: Text(item),
-                        ))
+                    .map(
+                      (item) =>
+                          DropdownMenuItem(value: item, child: Text(item)),
+                    )
                     .toList(),
                 onChanged: !_isLoading
                     ? (value) {
                         setState(() {
                           _selectedEquipment = value;
-                          // Reset quantity to 1 if not selecting Oxygéne
-                          if (value != 'Oxygéne') {
-                            _quantity = 1;
-                            _quantityController.text = '1';
-                          }
                         });
                       }
                     : null,
@@ -1700,8 +1713,9 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                   final picked = await showDatePicker(
                     context: context,
                     initialDate: DateTime.parse(_saleDate),
-                    firstDate:
-                        DateTime.now().subtract(const Duration(days: 30)),
+                    firstDate: DateTime.now().subtract(
+                      const Duration(days: 30),
+                    ),
                     lastDate: DateTime.now().add(const Duration(days: 365)),
                   );
                   if (picked != null) {
@@ -1717,36 +1731,34 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
               ),
               const SizedBox(height: 12),
 
-              // Quantity (only for oxygen bottles)
-              if (_selectedEquipment == 'Oxygéne') ...[
-                TextFormField(
-                  controller: _quantityController,
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    labelText: 'Quantité (nombre de bouteilles)',
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    hintText: '1',
+              // Quantity
+              TextFormField(
+                controller: _quantityController,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Quantité',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
-                  enabled: !_isLoading,
-                  onChanged: (value) =>
-                      setState(() => _quantity = int.tryParse(value) ?? 1),
-                  validator: (value) {
-                    final qty = int.tryParse(value ?? '');
-                    if (qty == null || qty < 1) {
-                      return 'La quantité doit être au moins 1';
-                    }
-                    return null;
-                  },
+                  hintText: '1',
                 ),
-                const SizedBox(height: 12),
-              ],
-
+                enabled: !_isLoading,
+                onChanged: (value) =>
+                    setState(() => _quantity = int.tryParse(value) ?? 1),
+                validator: (value) {
+                  final qty = int.tryParse(value ?? '');
+                  if (qty == null || qty < 1) {
+                    return 'La quantité doit être au moins 1';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
               // Cost
               TextFormField(
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: InputDecoration(
                   labelText: 'Montant de Vente (TND)',
                   border: OutlineInputBorder(
@@ -1786,9 +1798,7 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
         ),
         ElevatedButton(
           onPressed: _isLoading ? null : _submitForm,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green[600],
-          ),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.green[600]),
           child: _isLoading
               ? const SizedBox(
                   width: 20,

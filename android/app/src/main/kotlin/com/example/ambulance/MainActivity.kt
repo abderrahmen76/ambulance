@@ -1,4 +1,4 @@
-package com.example.ambulance
+﻿package com.example.ambulance
 
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity

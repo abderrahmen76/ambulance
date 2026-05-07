@@ -1,4 +1,4 @@
-import 'package:firebase_messaging/firebase_messaging.dart';
+﻿import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -214,7 +214,7 @@ class NotificationService {
                 '[NotificationService] Updates v2 channel deletion: $e'));
 
         debugPrint(
-            '[NotificationService] 🧹 Cleaned up old notification channels');
+            '[NotificationService] ðŸ§¹ Cleaned up old notification channels');
 
         // Wait a moment for deletion to complete
         await Future.delayed(const Duration(milliseconds: 500));
@@ -236,18 +236,18 @@ class NotificationService {
               ),
             )
             .then((_) => debugPrint(
-                '[NotificationService] 🔊 Created notification channel for ALL notifications'));
+                '[NotificationService] ðŸ”Š Created notification channel for ALL notifications'));
 
         // Mark channels as initialized so we don't recreate them
         _channelsInitialized = true;
         debugPrint(
-            '[NotificationService] ✅ Channels initialized (will not recreate)');
+            '[NotificationService] âœ… Channels initialized (will not recreate)');
       } catch (e) {
         debugPrint('[NotificationService] Channel setup error: $e');
       }
     } else {
       debugPrint(
-          '[NotificationService] ℹ️  Channels already initialized, skipping recreation');
+          '[NotificationService] â„¹ï¸  Channels already initialized, skipping recreation');
     }
 
     debugPrint('[NotificationService] Local notifications initialized');
@@ -285,7 +285,6 @@ class NotificationService {
           'action': 'register',
           'user_id': userId,
           'fcm_token': fcmToken,
-          'device_type': _getDeviceType(),
         },
       );
 
@@ -320,10 +319,10 @@ class NotificationService {
             final parsedData = jsonDecode(dataJsonString);
             notificationType = parsedData['type'] ?? 'unknown';
             debugPrint(
-                '[NotificationService] 📦 Extracted type from nested data JSON: $notificationType');
+                '[NotificationService] ðŸ“¦ Extracted type from nested data JSON: $notificationType');
           } catch (e) {
             debugPrint(
-                '[NotificationService] ⚠️  Failed to parse nested data JSON: $e');
+                '[NotificationService] âš ï¸  Failed to parse nested data JSON: $e');
             notificationType = 'unknown';
           }
         } else {
@@ -331,7 +330,7 @@ class NotificationService {
         }
       } else {
         debugPrint(
-            '[NotificationService] ✅ Type found directly in message.data: $notificationType');
+            '[NotificationService] âœ… Type found directly in message.data: $notificationType');
       }
 
       final notificationId = '$missionNumber-$notificationType';
@@ -339,26 +338,26 @@ class NotificationService {
       // Check if we've already shown this notification recently
       if (_recentNotificationIds.contains(notificationId)) {
         debugPrint(
-            '[NotificationService] ⚠️  DUPLICATE BLOCKED: $notificationId already shown in last ${_DEDUPE_WINDOW_MS}ms');
+            '[NotificationService] âš ï¸  DUPLICATE BLOCKED: $notificationId already shown in last ${_DEDUPE_WINDOW_MS}ms');
         return;
       }
 
       // Add to recent IDs
       _recentNotificationIds.add(notificationId);
       debugPrint(
-          '[NotificationService] ✅ Showing notification: $notificationId');
+          '[NotificationService] âœ… Showing notification: $notificationId');
 
       // Schedule cleanup after dedup window
       Future.delayed(Duration(milliseconds: _DEDUPE_WINDOW_MS), () {
         _recentNotificationIds.remove(notificationId);
         debugPrint(
-            '[NotificationService] 🧹 Cleaned dedupe cache: $notificationId');
+            '[NotificationService] ðŸ§¹ Cleaned dedupe cache: $notificationId');
       });
 
       // Use single channel for ALL notification types
       const channelId = 'ambulance_channel_v3';
       debugPrint(
-          '[NotificationService] 📢 Using channel: $channelId (for $notificationType)');
+          '[NotificationService] ðŸ“¢ Using channel: $channelId (for $notificationType)');
 
       // Get cached sound path (or fall back to built-in)
       final soundPath = await getNotificationSoundPath();
@@ -367,12 +366,12 @@ class NotificationService {
       AndroidNotificationSound androidSound;
       if (soundPath != 'mission_alert') {
         // Using cached file from Supabase
-        debugPrint('[NotificationService] 🎵 Using CACHED sound: $soundPath');
+        debugPrint('[NotificationService] ðŸŽµ Using CACHED sound: $soundPath');
         androidSound = UriAndroidNotificationSound(soundPath);
       } else {
         // Using built-in resource
         debugPrint(
-            '[NotificationService] 🎵 Using BUILT-IN sound: mission_alert');
+            '[NotificationService] ðŸŽµ Using BUILT-IN sound: mission_alert');
         androidSound =
             const RawResourceAndroidNotificationSound('mission_alert');
       }
@@ -417,9 +416,9 @@ class NotificationService {
       );
 
       debugPrint(
-          '[NotificationService] 📤 About to display notification with custom sound');
+          '[NotificationService] ðŸ“¤ About to display notification with custom sound');
       debugPrint(
-          '[NotificationService] 📋 Channel: $channelId | Sound: mission_alert.mp3');
+          '[NotificationService] ðŸ“‹ Channel: $channelId | Sound: mission_alert.mp3');
 
       await _localNotifications.show(
         message.hashCode,
@@ -429,7 +428,7 @@ class NotificationService {
         payload: jsonEncode(_minimalNotificationData(message.data)),
       );
 
-      debugPrint('[NotificationService] ✅ Notification displayed successfully');
+      debugPrint('[NotificationService] âœ… Notification displayed successfully');
 
       // Save notification to database
       await _saveNotification(message);
@@ -557,7 +556,7 @@ class NotificationService {
   /// Call this once during app initialization
   Future<void> preloadNotificationSounds() async {
     try {
-      debugPrint('[NotificationService] 🔄 Starting sound preload...');
+      debugPrint('[NotificationService] ðŸ”„ Starting sound preload...');
 
       // Get preferences and config
       final prefs = await SharedPreferences.getInstance();
@@ -568,7 +567,7 @@ class NotificationService {
 
       if (configVersion == null) {
         debugPrint(
-            '[NotificationService] ⚠️  Could not fetch sound config - using built-in fallback');
+            '[NotificationService] âš ï¸  Could not fetch sound config - using built-in fallback');
         return;
       }
 
@@ -580,10 +579,10 @@ class NotificationService {
         await _downloadAndCacheSound(prefs, configVersion);
       } else {
         debugPrint(
-            '[NotificationService] ✅ Sound is up-to-date (v$cachedVersion)');
+            '[NotificationService] âœ… Sound is up-to-date (v$cachedVersion)');
       }
     } catch (e) {
-      debugPrint('[NotificationService] ⚠️  Error preloading sound: $e');
+      debugPrint('[NotificationService] âš ï¸  Error preloading sound: $e');
       // Continue anyway - will fall back to built-in sound
     }
   }
@@ -614,7 +613,7 @@ class NotificationService {
         }
       }
     } catch (e) {
-      debugPrint('[NotificationService] ⚠️  Error fetching config: $e');
+      debugPrint('[NotificationService] âš ï¸  Error fetching config: $e');
     }
     return null;
   }
@@ -624,12 +623,12 @@ class NotificationService {
       SharedPreferences prefs, int version) async {
     try {
       debugPrint(
-          '[NotificationService] 📥 Downloading mission_alert.mp3 v$version...');
+          '[NotificationService] ðŸ“¥ Downloading mission_alert.mp3 v$version...');
 
       // Get sound URL from prefs (set by _fetchSoundConfigVersion)
       final soundUrl = prefs.getString(SOUND_URL_KEY);
       if (soundUrl == null) {
-        debugPrint('[NotificationService] ⚠️  No sound URL available');
+        debugPrint('[NotificationService] âš ï¸  No sound URL available');
         return;
       }
 
@@ -647,7 +646,7 @@ class NotificationService {
         if (!await soundDir.exists()) {
           await soundDir.create(recursive: true);
           debugPrint(
-              '[NotificationService] 📁 Created cache directory: ${soundDir.path}');
+              '[NotificationService] ðŸ“ Created cache directory: ${soundDir.path}');
         }
 
         // Write file
@@ -658,13 +657,13 @@ class NotificationService {
         await prefs.setInt(SOUND_VERSION_KEY, version);
 
         debugPrint(
-            '[NotificationService] ✅ Sound cached successfully (${response.bodyBytes.length} bytes)');
+            '[NotificationService] âœ… Sound cached successfully (${response.bodyBytes.length} bytes)');
       } else {
         debugPrint(
-            '[NotificationService] ⚠️  Download failed: ${response.statusCode}');
+            '[NotificationService] âš ï¸  Download failed: ${response.statusCode}');
       }
     } catch (e) {
-      debugPrint('[NotificationService] ⚠️  Error downloading sound: $e');
+      debugPrint('[NotificationService] âš ï¸  Error downloading sound: $e');
     }
   }
 
@@ -678,7 +677,7 @@ class NotificationService {
 
       if (await soundFile.exists()) {
         debugPrint(
-            '[NotificationService] 🎵 Using cached sound: ${soundFile.path}');
+            '[NotificationService] ðŸŽµ Using cached sound: ${soundFile.path}');
         return soundFile.path;
       }
     } catch (e) {
@@ -686,7 +685,8 @@ class NotificationService {
     }
 
     // Fallback to built-in
-    debugPrint('[NotificationService] 🎵 Using built-in sound: mission_alert');
+    debugPrint('[NotificationService] ðŸŽµ Using built-in sound: mission_alert');
     return 'mission_alert';
   }
 }
+

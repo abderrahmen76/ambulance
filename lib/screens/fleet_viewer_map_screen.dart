@@ -98,7 +98,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
   }
 
   String _placeDisplayName(DriverLocation driver) {
-    return _driverPlaceNames[driver.driverId] ?? 'Resolving place...';
+    return _driverPlaceNames[driver.driverId] ?? 'Recherche du lieu...';
   }
 
   /**
@@ -125,7 +125,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
 
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('✅ Connected to fleet tracking'),
+              content: Text('Connecté au suivi de flotte'),
               backgroundColor: Colors.green,
               duration: Duration(seconds: 2),
             ),
@@ -142,7 +142,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
 
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('❌ Disconnected from fleet tracking'),
+              content: Text('Déconnecté du suivi de flotte'),
               backgroundColor: Colors.orange,
             ),
           );
@@ -209,7 +209,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('🔴 Driver $driverId went offline'),
+              content: Text('Le conducteur $driverId est hors ligne'),
               backgroundColor: Colors.orange,
             ),
           );
@@ -337,7 +337,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
           _driverPlaceNames[driver.driverId] =
               placeName?.trim().isNotEmpty == true
               ? placeName!.trim()
-              : 'Place unavailable';
+              : 'Lieu indisponible';
         });
       }
     } catch (error) {
@@ -347,7 +347,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
           _driverPlaceNames[driver.driverId] =
               placeName?.trim().isNotEmpty == true
               ? placeName!.trim()
-              : 'Place unavailable';
+              : 'Lieu indisponible';
         });
       }
     }
@@ -444,7 +444,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Fleet Tracking',
+                          'Suivi en temps réel',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
@@ -452,7 +452,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '${_drivers.length} ambulances online',
+                          '${_drivers.length} ambulances en ligne',
                           style: const TextStyle(
                             fontSize: 12,
                             color: Colors.grey,
@@ -481,7 +481,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            _isConnected ? 'Connected' : 'Connecting',
+                            _isConnected ? 'Connecté' : 'Connexion',
                             style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -613,7 +613,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text(
-                        'Active Ambulances',
+                        'Ambulances actives',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 14,
@@ -645,7 +645,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                       padding: EdgeInsets.symmetric(vertical: 16),
                       child: Center(
                         child: Text(
-                          'No active ambulances for your company',
+                          'Aucune ambulance active pour votre société',
                           style: TextStyle(color: Colors.grey),
                         ),
                       ),
@@ -672,8 +672,8 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                               ),
                               title: Text(driver.driverName),
                               subtitle: Text(
-                                'Ambulance: ${_ambulanceDisplayName(driver.ambulanceId)}\n'
-                                'Location: ${_placeDisplayName(driver)}',
+                                'Ambulance : ${_ambulanceDisplayName(driver.ambulanceId)}\n'
+                                'Lieu : ${_placeDisplayName(driver)}',
                                 style: const TextStyle(fontSize: 11),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -743,7 +743,7 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Text(
-                    'Online',
+                    'En ligne',
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 11,
@@ -755,19 +755,19 @@ class _FleetViewerMapScreenState extends State<FleetViewerMapScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Ambulance: ${_ambulanceDisplayName(driver.ambulanceId)}',
+              'Ambulance : ${_ambulanceDisplayName(driver.ambulanceId)}',
               style: TextStyle(fontSize: 12, color: Colors.grey[700]),
             ),
             const SizedBox(height: 4),
             Text(
-              'Location: ${_placeDisplayName(driver)}',
+              'Lieu : ${_placeDisplayName(driver)}',
               style: TextStyle(fontSize: 11, color: Colors.grey[600]),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 4),
             Text(
-              'Updated: ${driver.timestamp.toString().split('.')[0]}',
+              'Mis à jour : ${driver.timestamp.toString().split('.')[0]}',
               style: TextStyle(fontSize: 10, color: Colors.grey[500]),
             ),
           ],

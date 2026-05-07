@@ -18,6 +18,7 @@ import '../services/company_staff_service.dart';
 import '../services/notification_service.dart';
 import '../services/scheduled_shift_runtime_service.dart';
 import '../widgets/clinic_dropdown_field.dart';
+import '../widgets/patient_request_summary_card.dart';
 import 'add_fuel_card_screen.dart';
 import 'refuel_fuel_card_screen.dart';
 import 'add_maintenance_screen.dart';
@@ -1215,6 +1216,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                             ),
                           ],
                         ),
+                        if (mission.hasPatientRequestDetails) ...[
+                          const SizedBox(height: 10),
+                          PatientRequestSummaryCard(
+                            mission: mission,
+                            dense: true,
+                            accentColor: accentColor,
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,

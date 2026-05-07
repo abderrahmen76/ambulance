@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
 import '../config/constants.dart';
 import '../models/user_model.dart';
@@ -72,7 +71,7 @@ class _ManagerShiftsScreenContentState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Unable to load shifts $error'),
+          content: Text('Impossible de charger les gardes : $error'),
           backgroundColor: Colors.red,
         ),
       );
@@ -90,7 +89,7 @@ class _ManagerShiftsScreenContentState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Shift ended successfully.'),
+          content: Text('Garde terminée avec succès.'),
           backgroundColor: Colors.orange,
         ),
       );
@@ -98,7 +97,7 @@ class _ManagerShiftsScreenContentState
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Unable to end shift: $error'),
+          content: Text('Impossible de terminer la garde : $error'),
           backgroundColor: Colors.red,
         ),
       );
@@ -117,7 +116,9 @@ class _ManagerShiftsScreenContentState
     if (_drivers.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('No driver accounts available for this tenant.'),
+          content: Text(
+            'Aucun compte conducteur disponible pour cette société.',
+          ),
           backgroundColor: Colors.orange,
         ),
       );
@@ -133,6 +134,8 @@ class _ManagerShiftsScreenContentState
 
     ShiftRecurrence recurrence =
         existingSchedule?.recurrenceType ?? ShiftRecurrence.daily;
+    String scheduleType =
+        existingSchedule?.scheduleType ?? DriverShiftSchedule.typeShift;
     int selectedWeekday = existingSchedule?.weekday ?? _selectedDate.weekday;
     DateTime startsOn =
         existingSchedule?.startsOn ??
@@ -145,7 +148,10 @@ class _ManagerShiftsScreenContentState
         _parseTimeOfDay(existingSchedule?.endTime) ??
         const TimeOfDay(hour: 16, minute: 0);
     final labelController = TextEditingController(
-      text: existingSchedule?.shiftLabel ?? 'Day',
+      text: existingSchedule?.shiftLabel ?? 'Jour',
+    );
+    final reasonController = TextEditingController(
+      text: existingSchedule?.absenceReason ?? '',
     );
     bool autoTracking = existingSchedule?.autoStartTracking ?? true;
     bool updateAll = true;
@@ -157,12 +163,34 @@ class _ManagerShiftsScreenContentState
       endTime = end;
     }
 
+    void applyScheduleType(String type) {
+      scheduleType = type;
+      if (type == DriverShiftSchedule.typeShift) {
+        if (labelController.text.trim().isEmpty ||
+            labelController.text.trim() == 'Repos' ||
+            labelController.text.trim() == 'Weekend' ||
+            labelController.text.trim() == 'Congé' ||
+            labelController.text.trim() == 'Maladie') {
+          labelController.text = 'Jour';
+        }
+        autoTracking = existingSchedule?.autoStartTracking ?? true;
+      } else {
+        labelController.text = _scheduleTypeLabel(type);
+        autoTracking = false;
+        startTime = const TimeOfDay(hour: 0, minute: 0);
+        endTime = const TimeOfDay(hour: 23, minute: 59);
+      }
+    }
+
     await showDialog<void>(
       context: context,
       barrierDismissible: !isSaving,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
+            final isWorkingShift =
+                scheduleType == DriverShiftSchedule.typeShift;
+
             Future<void> pickDate({
               required DateTime initialDate,
               required ValueChanged<DateTime> onPicked,
@@ -208,8 +236,8 @@ class _ManagerShiftsScreenContentState
                     children: [
                       Text(
                         existingSchedule == null
-                            ? 'Assign Shift'
-                            : 'Update Shift',
+                            ? 'Affecter une garde'
+                            : 'Modifier la garde',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w800,
@@ -217,7 +245,7 @@ class _ManagerShiftsScreenContentState
                         ),
                       ),
                       const SizedBox(height: 14),
-                      _dialogLabel('Driver'),
+                      _dialogLabel('Conducteur'),
                       const SizedBox(height: 6),
                       _dialogShell(
                         child: DropdownButtonHideUnderline(
@@ -246,54 +274,130 @@ class _ManagerShiftsScreenContentState
                         ),
                       ),
                       const SizedBox(height: 10),
-                      _dialogLabel('Shift label'),
+                      _dialogLabel('Type de planning'),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _scheduleTypeChip(
+                            label: 'Garde',
+                            selected:
+                                scheduleType == DriverShiftSchedule.typeShift,
+                            onTap: () => setDialogState(
+                              () => applyScheduleType(
+                                DriverShiftSchedule.typeShift,
+                              ),
+                            ),
+                          ),
+                          _scheduleTypeChip(
+                            label: 'Repos',
+                            selected:
+                                scheduleType == DriverShiftSchedule.typeRest,
+                            onTap: () => setDialogState(
+                              () => applyScheduleType(
+                                DriverShiftSchedule.typeRest,
+                              ),
+                            ),
+                          ),
+                          _scheduleTypeChip(
+                            label: 'Weekend',
+                            selected:
+                                scheduleType == DriverShiftSchedule.typeWeekend,
+                            onTap: () => setDialogState(
+                              () => applyScheduleType(
+                                DriverShiftSchedule.typeWeekend,
+                              ),
+                            ),
+                          ),
+                          _scheduleTypeChip(
+                            label: 'Congé',
+                            selected:
+                                scheduleType == DriverShiftSchedule.typeLeave,
+                            onTap: () => setDialogState(
+                              () => applyScheduleType(
+                                DriverShiftSchedule.typeLeave,
+                              ),
+                            ),
+                          ),
+                          _scheduleTypeChip(
+                            label: 'Maladie',
+                            selected:
+                                scheduleType ==
+                                DriverShiftSchedule.typeSickLeave,
+                            onTap: () => setDialogState(
+                              () => applyScheduleType(
+                                DriverShiftSchedule.typeSickLeave,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      _dialogLabel('Nom de la garde'),
                       const SizedBox(height: 6),
                       _dialogShell(
                         child: TextField(
                           controller: labelController,
                           enabled: !isSaving,
                           decoration: const InputDecoration.collapsed(
-                            hintText: 'Day',
+                            hintText: 'Jour',
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          _presetChip(
-                            label: 'Day',
-                            onTap: () => setDialogState(
-                              () => applyTemplate(
-                                'Day',
-                                const TimeOfDay(hour: 8, minute: 0),
-                                const TimeOfDay(hour: 16, minute: 0),
-                              ),
+                      if (!isWorkingShift) ...[
+                        const SizedBox(height: 10),
+                        _dialogLabel('Motif (optionnel)'),
+                        const SizedBox(height: 6),
+                        _dialogShell(
+                          child: TextField(
+                            controller: reasonController,
+                            enabled: !isSaving,
+                            decoration: const InputDecoration.collapsed(
+                              hintText: 'Ex : congé annuel, repos...',
                             ),
                           ),
-                          _presetChip(
-                            label: 'Evening',
-                            onTap: () => setDialogState(
-                              () => applyTemplate(
-                                'Evening',
-                                const TimeOfDay(hour: 10, minute: 0),
-                                const TimeOfDay(hour: 18, minute: 0),
+                        ),
+                      ],
+                      if (isWorkingShift) ...[
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _presetChip(
+                              label: 'Jour',
+                              onTap: () => setDialogState(
+                                () => applyTemplate(
+                                  'Jour',
+                                  const TimeOfDay(hour: 8, minute: 0),
+                                  const TimeOfDay(hour: 16, minute: 0),
+                                ),
                               ),
                             ),
-                          ),
-                          _presetChip(
-                            label: 'Night',
-                            onTap: () => setDialogState(
-                              () => applyTemplate(
-                                'Night',
-                                const TimeOfDay(hour: 16, minute: 0),
-                                const TimeOfDay(hour: 3, minute: 0),
+                            _presetChip(
+                              label: 'Soir',
+                              onTap: () => setDialogState(
+                                () => applyTemplate(
+                                  'Soir',
+                                  const TimeOfDay(hour: 10, minute: 0),
+                                  const TimeOfDay(hour: 18, minute: 0),
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
+                            _presetChip(
+                              label: 'Nuit',
+                              onTap: () => setDialogState(
+                                () => applyTemplate(
+                                  'Nuit',
+                                  const TimeOfDay(hour: 16, minute: 0),
+                                  const TimeOfDay(hour: 3, minute: 0),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 14),
                       Center(
                         child: Container(
@@ -306,14 +410,14 @@ class _ManagerShiftsScreenContentState
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               _segmentButton(
-                                label: 'Daily',
+                                label: 'Quotidien',
                                 selected: recurrence == ShiftRecurrence.daily,
                                 onTap: () => setDialogState(
                                   () => recurrence = ShiftRecurrence.daily,
                                 ),
                               ),
                               _segmentButton(
-                                label: 'Weekly',
+                                label: 'Hebdomadaire',
                                 selected: recurrence == ShiftRecurrence.weekly,
                                 onTap: () => setDialogState(
                                   () => recurrence = ShiftRecurrence.weekly,
@@ -324,10 +428,10 @@ class _ManagerShiftsScreenContentState
                         ),
                       ),
                       const SizedBox(height: 12),
-                      _dialogLabel('Starts on'),
+                      _dialogLabel('Débute le'),
                       const SizedBox(height: 6),
                       _tapShell(
-                        label: DateFormat('EEE, d MMM').format(startsOn),
+                        label: _formatShortDate(startsOn),
                         onTap: isSaving
                             ? null
                             : () => pickDate(
@@ -336,12 +440,12 @@ class _ManagerShiftsScreenContentState
                               ),
                       ),
                       const SizedBox(height: 10),
-                      _dialogLabel('Ends on (optional)'),
+                      _dialogLabel('Se termine le (optionnel)'),
                       const SizedBox(height: 6),
                       _tapShell(
                         label: endsOn == null
-                            ? 'No end date'
-                            : DateFormat('EEE, d MMM').format(endsOn!),
+                            ? 'Aucune date de fin'
+                            : _formatShortDate(endsOn!),
                         onTap: isSaving
                             ? null
                             : () => pickDate(
@@ -352,7 +456,7 @@ class _ManagerShiftsScreenContentState
                       ),
                       if (recurrence == ShiftRecurrence.weekly) ...[
                         const SizedBox(height: 10),
-                        _dialogLabel('Weekday'),
+                        _dialogLabel('Jour de la semaine'),
                         const SizedBox(height: 6),
                         _dialogShell(
                           child: DropdownButtonHideUnderline(
@@ -378,87 +482,100 @@ class _ManagerShiftsScreenContentState
                           ),
                         ),
                       ],
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _dialogLabel('Start time'),
-                                const SizedBox(height: 6),
-                                _tapShell(
-                                  label: _formatTimeOfDay(startTime),
-                                  onTap: isSaving
-                                      ? null
-                                      : () => pickTime(
-                                          initialTime: startTime,
-                                          onPicked: (picked) =>
-                                              startTime = picked,
-                                        ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                _dialogLabel('End time'),
-                                const SizedBox(height: 6),
-                                _tapShell(
-                                  label: _formatTimeOfDay(endTime),
-                                  onTap: isSaving
-                                      ? null
-                                      : () => pickTime(
-                                          initialTime: endTime,
-                                          onPicked: (picked) =>
-                                              endTime = picked,
-                                        ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'Auto-start tracking',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF4B4B4B),
+                      if (isWorkingShift) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _dialogLabel('Heure de début'),
+                                  const SizedBox(height: 6),
+                                  _tapShell(
+                                    label: _formatTimeOfDay(startTime),
+                                    onTap: isSaving
+                                        ? null
+                                        : () => pickTime(
+                                            initialTime: startTime,
+                                            onPicked: (picked) =>
+                                                startTime = picked,
+                                          ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'Start GPS automatically for the selected ambulance when this shift becomes active.',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade700,
-                                  ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _dialogLabel('Heure de fin'),
+                                  const SizedBox(height: 6),
+                                  _tapShell(
+                                    label: _formatTimeOfDay(endTime),
+                                    onTap: isSaving
+                                        ? null
+                                        : () => pickTime(
+                                            initialTime: endTime,
+                                            onPicked: (picked) =>
+                                                endTime = picked,
+                                          ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Démarrer le suivi automatiquement',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF4B4B4B),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    'Démarre automatiquement le GPS de l’ambulance sélectionnée quand cette garde devient active.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: autoTracking,
+                              onChanged: isSaving
+                                  ? null
+                                  : (value) {
+                                      setDialogState(
+                                        () => autoTracking = value,
+                                      );
+                                    },
+                              activeColor: const Color(0xFFA65C56),
+                            ),
+                          ],
+                        ),
+                      ] else ...[
+                        const SizedBox(height: 14),
+                        Text(
+                          'Cette entrée bloque la journée du conducteur sans démarrer le suivi GPS.',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade700,
                           ),
-                          Switch(
-                            value: autoTracking,
-                            onChanged: isSaving
-                                ? null
-                                : (value) {
-                                    setDialogState(() => autoTracking = value);
-                                  },
-                            activeColor: const Color(0xFFA65C56),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                       if (existingSchedule != null) ...[
                         const SizedBox(height: 8),
                         CheckboxListTile(
@@ -469,9 +586,9 @@ class _ManagerShiftsScreenContentState
                                   () => updateAll = value ?? true,
                                 ),
                           contentPadding: EdgeInsets.zero,
-                          title: const Text('Update for all'),
+                          title: const Text('Modifier toute la série'),
                           subtitle: const Text(
-                            'Apply the change to the whole recurring shift.',
+                            'Appliquer la modification à toute la garde récurrente.',
                           ),
                         ),
                       ],
@@ -484,7 +601,7 @@ class _ManagerShiftsScreenContentState
                                 ? null
                                 : () => Navigator.of(dialogContext).pop(),
                             child: const Text(
-                              'Cancel',
+                              'Annuler',
                               style: TextStyle(color: Colors.redAccent),
                             ),
                           ),
@@ -499,6 +616,20 @@ class _ManagerShiftsScreenContentState
                                         labelController.text.trim().isEmpty) {
                                       return;
                                     }
+                                    final effectiveLabel = labelController.text
+                                        .trim();
+                                    final effectiveReason =
+                                        reasonController.text.trim().isEmpty
+                                        ? null
+                                        : reasonController.text.trim();
+                                    final effectiveStartTime = isWorkingShift
+                                        ? _formatTimeOfDay(startTime)
+                                        : '00:00';
+                                    final effectiveEndTime = isWorkingShift
+                                        ? _formatTimeOfDay(endTime)
+                                        : '23:59';
+                                    final effectiveAutoTracking =
+                                        isWorkingShift && autoTracking;
 
                                     setDialogState(() => isSaving = true);
                                     try {
@@ -508,8 +639,9 @@ class _ManagerShiftsScreenContentState
                                           driver: selectedDriver,
                                           createdBy: widget.user.id,
                                           recurrence: recurrence,
-                                          shiftLabel: labelController.text
-                                              .trim(),
+                                          shiftLabel: effectiveLabel,
+                                          scheduleType: scheduleType,
+                                          absenceReason: effectiveReason,
                                           startsOn: startsOn,
                                           endsOn: endsOn,
                                           weekday:
@@ -517,17 +649,17 @@ class _ManagerShiftsScreenContentState
                                                   ShiftRecurrence.weekly
                                               ? selectedWeekday
                                               : null,
-                                          startTime: _formatTimeOfDay(
-                                            startTime,
-                                          ),
-                                          endTime: _formatTimeOfDay(endTime),
-                                          autoStartTracking: autoTracking,
+                                          startTime: effectiveStartTime,
+                                          endTime: effectiveEndTime,
+                                          autoStartTracking:
+                                              effectiveAutoTracking,
                                         );
                                       } else if (updateAll) {
                                         await _scheduleService.updateSchedule(
                                           scheduleId: existingSchedule.id,
-                                          shiftLabel: labelController.text
-                                              .trim(),
+                                          shiftLabel: effectiveLabel,
+                                          scheduleType: scheduleType,
+                                          absenceReason: effectiveReason,
                                           recurrence: recurrence,
                                           startsOn: startsOn,
                                           endsOn: endsOn,
@@ -536,11 +668,10 @@ class _ManagerShiftsScreenContentState
                                                   ShiftRecurrence.weekly
                                               ? selectedWeekday
                                               : null,
-                                          startTime: _formatTimeOfDay(
-                                            startTime,
-                                          ),
-                                          endTime: _formatTimeOfDay(endTime),
-                                          autoStartTracking: autoTracking,
+                                          startTime: effectiveStartTime,
+                                          endTime: effectiveEndTime,
+                                          autoStartTracking:
+                                              effectiveAutoTracking,
                                           isActive: true,
                                         );
                                       }
@@ -553,7 +684,7 @@ class _ManagerShiftsScreenContentState
                                         context,
                                       ).showSnackBar(
                                         const SnackBar(
-                                          content: Text('Shift saved.'),
+                                          content: Text('Garde enregistrée.'),
                                           backgroundColor: Colors.green,
                                         ),
                                       );
@@ -565,7 +696,7 @@ class _ManagerShiftsScreenContentState
                                       ).showSnackBar(
                                         SnackBar(
                                           content: Text(
-                                            'Unable to save shift: $error',
+                                            'Impossible d’enregistrer la garde : $error',
                                           ),
                                           backgroundColor: Colors.red,
                                         ),
@@ -592,7 +723,7 @@ class _ManagerShiftsScreenContentState
                                       color: Colors.white,
                                     ),
                                   )
-                                : const Text('Save'),
+                                : const Text('Enregistrer'),
                           ),
                         ],
                       ),
@@ -623,7 +754,7 @@ class _ManagerShiftsScreenContentState
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
         label: const Text(
-          'Assign Shift',
+          'Affecter une garde',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
@@ -638,7 +769,7 @@ class _ManagerShiftsScreenContentState
               children: [
                 Expanded(
                   child: _statCard(
-                    label: 'Active',
+                    label: 'Actives',
                     value: '${_liveShifts.length}',
                     color: AppColors.primary,
                   ),
@@ -646,7 +777,7 @@ class _ManagerShiftsScreenContentState
                 const SizedBox(width: 12),
                 Expanded(
                   child: _statCard(
-                    label: 'Pending',
+                    label: 'En attente',
                     value: '${_pendingCount()}',
                     color: const Color(0xFFE27D60),
                   ),
@@ -654,7 +785,7 @@ class _ManagerShiftsScreenContentState
                 const SizedBox(width: 12),
                 Expanded(
                   child: _statCard(
-                    label: 'Conflicts',
+                    label: 'Conflits',
                     value: '${_selectedConflicts.length}',
                     color: Colors.red,
                   ),
@@ -693,12 +824,12 @@ class _ManagerShiftsScreenContentState
             child: Row(
               children: [
                 _modeTab(
-                  label: 'Day',
+                  label: 'Jour',
                   selected: _dayMode,
                   onTap: () => setState(() => _dayMode = true),
                 ),
                 _modeTab(
-                  label: 'Week',
+                  label: 'Semaine',
                   selected: !_dayMode,
                   onTap: () => setState(() => _dayMode = false),
                 ),
@@ -725,8 +856,8 @@ class _ManagerShiftsScreenContentState
                 Expanded(
                   child: Text(
                     _dayMode
-                        ? DateFormat('EEEE, d MMM').format(_selectedDate)
-                        : 'Week of ${DateFormat('d MMM').format(_weekStart(_selectedDate))}',
+                        ? _formatLongDate(_selectedDate)
+                        : 'Semaine du ${_formatShortDate(_weekStart(_selectedDate))}',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
@@ -828,7 +959,7 @@ class _ManagerShiftsScreenContentState
   Widget _buildDayTimeline() {
     final schedules = _selectedDaySchedules;
     if (schedules.isEmpty) {
-      return _emptyCard('No shifts planned for this day.');
+      return _emptyCard('Aucune garde prévue pour cette journée.');
     }
 
     return Container(
@@ -879,12 +1010,16 @@ class _ManagerShiftsScreenContentState
     final conflict = _selectedConflicts.any(
       (item) => item.first.id == schedule.id || item.second.id == schedule.id,
     );
-    final leftFraction = schedule.startMinutes / (24 * 60);
+    final leftFraction = schedule.isWorkingShift
+        ? schedule.startMinutes / (24 * 60)
+        : 0.0;
     var duration = schedule.endMinutes - schedule.startMinutes;
     if (duration <= 0) {
       duration += 24 * 60;
     }
-    final widthFraction = (duration / (24 * 60)).clamp(0.14, 0.9);
+    final widthFraction = schedule.isWorkingShift
+        ? (duration / (24 * 60)).clamp(0.14, 0.9)
+        : 0.98;
 
     return Container(
       height: 92,
@@ -961,7 +1096,7 @@ class _ManagerShiftsScreenContentState
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    schedule.shiftLabel,
+                                    schedule.displayLabel,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -972,7 +1107,7 @@ class _ManagerShiftsScreenContentState
                                     ),
                                   ),
                                   Text(
-                                    schedule.timeRangeLabel,
+                                    schedule.displayTimeRangeLabel,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: const TextStyle(
@@ -997,7 +1132,11 @@ class _ManagerShiftsScreenContentState
                                     borderRadius: BorderRadius.circular(999),
                                   ),
                                   child: Text(
-                                    conflict ? 'Conflict' : 'Confirmed',
+                                    conflict
+                                        ? 'Conflit'
+                                        : schedule.isWorkingShift
+                                        ? 'Confirmée'
+                                        : schedule.scheduleTypeLabel,
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 11,
@@ -1052,7 +1191,7 @@ class _ManagerShiftsScreenContentState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                DateFormat('EEE, d MMM').format(day),
+                _formatShortDate(day),
                 style: const TextStyle(
                   fontWeight: FontWeight.w700,
                   color: AppColors.primary,
@@ -1061,7 +1200,7 @@ class _ManagerShiftsScreenContentState
               const SizedBox(height: 10),
               if (schedules.isEmpty)
                 Text(
-                  'No planned shifts',
+                  'Aucune garde prévue',
                   style: TextStyle(color: Colors.grey.shade600),
                 )
               else
@@ -1076,10 +1215,10 @@ class _ManagerShiftsScreenContentState
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
-                        Text(schedule.shiftLabel),
+                        Text(schedule.displayLabel),
                         const SizedBox(width: 12),
                         Text(
-                          schedule.timeRangeLabel,
+                          schedule.displayTimeRangeLabel,
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ],
@@ -1111,7 +1250,7 @@ class _ManagerShiftsScreenContentState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Schedule Conflict Detected',
+                  'Conflit de planning détecté',
                   style: TextStyle(
                     color: Colors.red,
                     fontWeight: FontWeight.w700,
@@ -1120,7 +1259,7 @@ class _ManagerShiftsScreenContentState
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  conflict.message,
+                  _conflictMessage(conflict),
                   style: TextStyle(color: Colors.grey.shade800, height: 1.35),
                 ),
               ],
@@ -1143,7 +1282,7 @@ class _ManagerShiftsScreenContentState
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Live Tracking',
+            'Suivi en direct',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.w700,
@@ -1153,7 +1292,7 @@ class _ManagerShiftsScreenContentState
           const SizedBox(height: 12),
           if (_liveShifts.isEmpty)
             Text(
-              'No driver is currently on a live shift.',
+              'Aucun conducteur n’est actuellement en garde active.',
               style: TextStyle(color: Colors.grey.shade700),
             )
           else
@@ -1198,8 +1337,8 @@ class _ManagerShiftsScreenContentState
                           const SizedBox(height: 2),
                           Text(
                             activeClaim == null
-                                ? 'On shift, no ambulance claimed'
-                                : 'Tracking ${activeClaim.ambulanceNumber}',
+                                ? 'En garde, aucune ambulance attribuée'
+                                : 'Suivi de ${activeClaim.ambulanceNumber}',
                             style: TextStyle(color: Colors.grey.shade700),
                           ),
                         ],
@@ -1258,6 +1397,28 @@ class _ManagerShiftsScreenContentState
     );
   }
 
+  Widget _scheduleTypeChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      selectedColor: const Color(0xFFFFE8E8),
+      backgroundColor: Colors.white,
+      side: BorderSide(
+        color: selected ? AppColors.primary : const Color(0xFFE7B8B8),
+      ),
+      labelStyle: TextStyle(
+        color: selected ? AppColors.primary : const Color(0xFF4B4B4B),
+        fontWeight: FontWeight.w700,
+      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+    );
+  }
+
   Widget _segmentButton({
     required String label,
     required bool selected,
@@ -1306,7 +1467,7 @@ class _ManagerShiftsScreenContentState
 
   int _pendingCount() {
     return _selectedDaySchedules.where((schedule) {
-      return !schedule.isActiveAt(DateTime.now());
+      return schedule.isWorkingShift && !schedule.isActiveAt(DateTime.now());
     }).length;
   }
 
@@ -1324,14 +1485,39 @@ class _ManagerShiftsScreenContentState
   }
 
   Color _scheduleColor(DriverShiftSchedule schedule) {
+    switch (schedule.scheduleType) {
+      case DriverShiftSchedule.typeRest:
+        return const Color(0xFF64748B);
+      case DriverShiftSchedule.typeWeekend:
+        return const Color(0xFF2563EB);
+      case DriverShiftSchedule.typeLeave:
+        return const Color(0xFF16A34A);
+      case DriverShiftSchedule.typeSickLeave:
+        return const Color(0xFFDC2626);
+    }
     final label = schedule.shiftLabel.toLowerCase();
-    if (label.contains('night')) {
+    if (label.contains('night') || label.contains('nuit')) {
       return const Color(0xFF41295A);
     }
-    if (label.contains('evening')) {
+    if (label.contains('evening') || label.contains('soir')) {
       return const Color(0xFFE27D60);
     }
     return AppColors.primary;
+  }
+
+  String _scheduleTypeLabel(String type) {
+    switch (type) {
+      case DriverShiftSchedule.typeRest:
+        return 'Repos';
+      case DriverShiftSchedule.typeWeekend:
+        return 'Weekend';
+      case DriverShiftSchedule.typeLeave:
+        return 'Congé';
+      case DriverShiftSchedule.typeSickLeave:
+        return 'Maladie';
+      default:
+        return 'Jour';
+    }
   }
 
   DateTime _weekStart(DateTime date) {
@@ -1342,20 +1528,60 @@ class _ManagerShiftsScreenContentState
   String _weekdayLabel(int weekday) {
     switch (weekday) {
       case DateTime.monday:
-        return 'Monday';
+        return 'Lundi';
       case DateTime.tuesday:
-        return 'Tuesday';
+        return 'Mardi';
       case DateTime.wednesday:
-        return 'Wednesday';
+        return 'Mercredi';
       case DateTime.thursday:
-        return 'Thursday';
+        return 'Jeudi';
       case DateTime.friday:
-        return 'Friday';
+        return 'Vendredi';
       case DateTime.saturday:
-        return 'Saturday';
+        return 'Samedi';
       default:
-        return 'Sunday';
+        return 'Dimanche';
     }
+  }
+
+  String _monthLabel(int month) {
+    switch (month) {
+      case DateTime.january:
+        return 'janv.';
+      case DateTime.february:
+        return 'févr.';
+      case DateTime.march:
+        return 'mars';
+      case DateTime.april:
+        return 'avr.';
+      case DateTime.may:
+        return 'mai';
+      case DateTime.june:
+        return 'juin';
+      case DateTime.july:
+        return 'juil.';
+      case DateTime.august:
+        return 'août';
+      case DateTime.september:
+        return 'sept.';
+      case DateTime.october:
+        return 'oct.';
+      case DateTime.november:
+        return 'nov.';
+      default:
+        return 'déc.';
+    }
+  }
+
+  String _formatShortDate(DateTime date) =>
+      '${_weekdayLabel(date.weekday).substring(0, 3)}, ${date.day} ${_monthLabel(date.month)}';
+
+  String _formatLongDate(DateTime date) =>
+      '${_weekdayLabel(date.weekday)}, ${date.day} ${_monthLabel(date.month)}';
+
+  String _conflictMessage(ShiftConflict conflict) {
+    return '${conflict.driverName} a des gardes qui se chevauchent : '
+        '${conflict.first.timeRangeLabel} et ${conflict.second.timeRangeLabel}.';
   }
 
   String _formatTimeOfDay(TimeOfDay time) {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
 import 'package:url_launcher/url_launcher.dart';
 import '../config/constants.dart';
 import '../models/mission_model.dart';
@@ -9,7 +10,7 @@ import '../services/mission_service.dart';
 import '../services/pdf_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/clinic_dropdown_field.dart';
-import '../widgets/custom_clinic_dialog.dart';
+import '../widgets/patient_request_summary_card.dart';
 import 'mission_technical_sheet_screen.dart';
 
 class ActiveMissionsScreen extends StatefulWidget {
@@ -36,8 +37,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
 
   Future<void> _checkActiveMission() async {
     try {
-      final activeMissions =
-          await _missionService.getActiveMissions(widget.ambulanceId);
+      final activeMissions = await _missionService.getActiveMissions(
+        widget.ambulanceId,
+      );
       if (mounted) {
         setState(() {
           _hasActiveMission = activeMissions.isNotEmpty;
@@ -66,7 +68,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
       final staff = await _companyStaffService.getCompanyStaff(tenantId);
       if (!mounted) return;
       setState(() {
-        _companyStaff = staff.where((member) => member.id != widget.user.id).toList();
+        _companyStaff = staff
+            .where((member) => member.id != widget.user.id)
+            .toList();
       });
     } catch (e) {
       debugPrint('Error loading company staff: $e');
@@ -79,11 +83,13 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         // For pending missions, use getAvailableMissions() to fetch all pending missions
         // For active/completed, use getMissionsForAmbulance() to fetch missions assigned to this ambulance
         if (_selectedStatus == 'pending') {
-          _allMissionsFuture =
-              _missionService.getAvailableMissions(widget.ambulanceId);
+          _allMissionsFuture = _missionService.getAvailableMissions(
+            widget.ambulanceId,
+          );
         } else {
-          _allMissionsFuture =
-              _missionService.getMissionsForAmbulance(widget.ambulanceId);
+          _allMissionsFuture = _missionService.getMissionsForAmbulance(
+            widget.ambulanceId,
+          );
         }
       });
     }
@@ -91,14 +97,18 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
 
   Future<void> _openClinicMissionNavigation(Mission mission) async {
     final isPickupReached = mission.dispatchPhase == 'en_route';
-    final launchUrlString =
-        _buildClinicMissionNavigationUrl(mission, isPickupReached);
+    final launchUrlString = _buildClinicMissionNavigationUrl(
+      mission,
+      isPickupReached,
+    );
 
     if (launchUrlString == null || launchUrlString.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Aucune URL de navigation disponible pour cette mission'),
+            content: Text(
+              'Aucune URL de navigation disponible pour cette mission',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -119,7 +129,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   String? _buildClinicMissionNavigationUrl(
-      Mission mission, bool isPickupReached) {
+    Mission mission,
+    bool isPickupReached,
+  ) {
     if (isPickupReached) {
       if (_hasCoordinates(mission.pickupLat, mission.pickupLng) &&
           _hasCoordinates(mission.destinationLat, mission.destinationLng)) {
@@ -139,13 +151,16 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           '&travelmode=driving';
     }
 
-    return mission.pickupGoogleMapsUrl ?? _buildSearchUrl(mission.pickupAddress);
+    return mission.pickupGoogleMapsUrl ??
+        _buildSearchUrl(mission.pickupAddress);
   }
 
   bool _canOpenClinicMissionNavigation(Mission mission) {
     final isPickupReached = mission.dispatchPhase == 'en_route';
-    final launchUrlString =
-        _buildClinicMissionNavigationUrl(mission, isPickupReached);
+    final launchUrlString = _buildClinicMissionNavigationUrl(
+      mission,
+      isPickupReached,
+    );
     return launchUrlString != null && launchUrlString.isNotEmpty;
   }
 
@@ -236,12 +251,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           const SizedBox(height: 16),
                           Text(
                             'Erreur lors du chargement des missions',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: Colors.grey[600],
-                                ),
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: Colors.grey[600]),
                           ),
                           const SizedBox(height: 8),
                           Padding(
@@ -249,12 +260,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                             child: Text(
                               '${snapshot.error}',
                               textAlign: TextAlign.center,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(
-                                    color: Colors.red[600],
-                                  ),
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: Colors.red[600]),
                             ),
                           ),
                         ],
@@ -268,18 +275,23 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   var filteredMissions = (_selectedStatus == 'pending')
                       ? allMissions
                       : allMissions
-                          .where((mission) => mission.status == _selectedStatus)
-                          .toList();
+                            .where(
+                              (mission) => mission.status == _selectedStatus,
+                            )
+                            .toList();
 
                   // Sort all missions by newest first
                   filteredMissions.sort((a, b) {
                     try {
-                      final dateA =
-                          DateTime.parse(a.missionDate ?? '1970-01-01');
-                      final dateB =
-                          DateTime.parse(b.missionDate ?? '1970-01-01');
-                      return dateB
-                          .compareTo(dateA); // Descending order (newest first)
+                      final dateA = DateTime.parse(
+                        a.missionDate ?? '1970-01-01',
+                      );
+                      final dateB = DateTime.parse(
+                        b.missionDate ?? '1970-01-01',
+                      );
+                      return dateB.compareTo(
+                        dateA,
+                      ); // Descending order (newest first)
                     } catch (e) {
                       return 0;
                     }
@@ -294,20 +306,20 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                             _selectedStatus == 'active'
                                 ? Icons.assignment_turned_in
                                 : _selectedStatus == 'completed'
-                                    ? Icons.check_circle
-                                    : Icons.schedule,
+                                ? Icons.check_circle
+                                : Icons.schedule,
                             color: Colors.grey[400],
                             size: 48,
                           ),
                           const SizedBox(height: 16),
                           Text(
-                            'Aucune mission ${_selectedStatus == 'active' ? 'active' : _selectedStatus == 'completed' ? 'complétée' : 'en attente'}',
-                            style: Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(
-                                  color: Colors.grey[600],
-                                ),
+                            'Aucune mission ${_selectedStatus == 'active'
+                                ? 'active'
+                                : _selectedStatus == 'completed'
+                                ? 'complétée'
+                                : 'en attente'}',
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: Colors.grey[600]),
                           ),
                         ],
                       ),
@@ -315,7 +327,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   }
 
                   return _buildMissionsList(
-                      context, filteredMissions, _selectedStatus == 'pending');
+                    context,
+                    filteredMissions,
+                    _selectedStatus == 'pending',
+                  );
                 },
               ),
             ),
@@ -360,7 +375,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Widget _buildMissionsList(
-      BuildContext context, List<Mission> missions, bool isPending) {
+    BuildContext context,
+    List<Mission> missions,
+    bool isPending,
+  ) {
     return SingleChildScrollView(
       padding: EdgeInsets.all(context.responsive.paddingValueLarge),
       child: Column(
@@ -370,8 +388,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
 
           return Padding(
             padding: const EdgeInsets.only(bottom: 16),
-            child:
-                _buildMissionCardCompact(context, mission, isActive, isPending),
+            child: _buildMissionCardCompact(
+              context,
+              mission,
+              isActive,
+              isPending,
+            ),
           );
         }).toList(),
       ),
@@ -379,11 +401,16 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Widget _buildMissionCardCompact(
-      BuildContext context, Mission mission, bool isActive, bool isPending) {
+    BuildContext context,
+    Mission mission,
+    bool isActive,
+    bool isPending,
+  ) {
     final isPriority = (mission.priority ?? '').toUpperCase() == 'CRITICAL';
     final clinicName = mission.clinicName?.trim();
-    final clinicLabel =
-        (clinicName != null && clinicName.isNotEmpty) ? clinicName : 'Mission clinique';
+    final clinicLabel = (clinicName != null && clinicName.isNotEmpty)
+        ? clinicName
+        : 'Mission clinique';
     final isGuestPatientMission = mission.isGuestPatientMission;
     final isClinicMission =
         mission.clinicTenantId != null && mission.clinicTenantId!.isNotEmpty;
@@ -392,71 +419,74 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         : (isGuestPatientMission ? const Color(0xFF0F766E) : AppColors.primary);
 
     return Container(
-        padding: EdgeInsets.all(context.responsive.paddingValueLarge),
-        decoration: BoxDecoration(
-          color: isClinicMission ? const Color(0xFFF8F5FF) : Colors.white,
-          borderRadius:
-              BorderRadius.circular(context.responsive.radiusLarge.topLeft.x),
-          border: Border.all(
-            color: isClinicMission ? const Color(0xFFD8B4FE) : Colors.grey[200]!,
-            width: isClinicMission ? 1.4 : 1,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: (isClinicMission ? const Color(0xFF7C3AED) : Colors.black)
-                  .withOpacity(isClinicMission ? 0.10 : 0.05),
-              blurRadius: isClinicMission ? 10 : 4,
-              offset: const Offset(0, 2),
-            ),
-          ],
+      padding: EdgeInsets.all(context.responsive.paddingValueLarge),
+      decoration: BoxDecoration(
+        color: isClinicMission ? const Color(0xFFF8F5FF) : Colors.white,
+        borderRadius: BorderRadius.circular(
+          context.responsive.radiusLarge.topLeft.x,
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        border: Border.all(
+          color: isClinicMission ? const Color(0xFFD8B4FE) : Colors.grey[200]!,
+          width: isClinicMission ? 1.4 : 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: (isClinicMission ? const Color(0xFF7C3AED) : Colors.black)
+                .withOpacity(isClinicMission ? 0.10 : 0.05),
+            blurRadius: isClinicMission ? 10 : 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (isClinicMission) ...[
             Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
+                ),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.local_hospital,
+                    color: Colors.white,
+                    size: 18,
                   ),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.local_hospital,
-                        color: Colors.white, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'MISSION CLINIQUE',
-                            style: TextStyle(
-                              color: Colors.white70,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 0.8,
-                            ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'MISSION CLINIQUE',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
                           ),
-                          const SizedBox(height: 2),
-                            Text(
-                              clinicLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                            ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          clinicLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
             ),
             const SizedBox(height: 12),
           ],
@@ -465,10 +495,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                  colors: [
-                    Color(0xFF0F766E),
-                    Color(0xFF14B8A6),
-                  ],
+                  colors: [Color(0xFF0F766E), Color(0xFF14B8A6)],
                 ),
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -512,109 +539,111 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
             ),
             const SizedBox(height: 12),
           ],
-            // Header
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Expanded(
+          // Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                      Text(
-                        'MISSION #${mission.missionNumber}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                    Text(
+                      'MISSION #${mission.missionNumber}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
                       ),
-                      if (isClinicMission) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.local_hospital,
-                              size: 15,
-                              color: accentColor,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                clinicLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: accentColor,
-                                ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (isClinicMission) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.local_hospital,
+                            size: 15,
+                            color: accentColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              clinicLabel,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: accentColor,
                               ),
                             ),
-                          ],
-                        ),
-                      ],
-                      if (isGuestPatientMission &&
-                          mission.requestedAmbulanceNumber != null) ...[
-                        const SizedBox(height: 6),
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.local_shipping_outlined,
-                              size: 15,
-                              color: accentColor,
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                'Preferee pour ${mission.requestedAmbulanceNumber}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: accentColor,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                      const SizedBox(height: 4),
-                        Text(
-                          mission.missionDate,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isClinicMission
-                              ? const Color(0xFF6D28D9)
-                              : Colors.grey[600],
-                        ),
+                          ),
+                        ],
                       ),
                     ],
-                  ),
+                    if (isGuestPatientMission &&
+                        mission.requestedAmbulanceNumber != null) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.local_shipping_outlined,
+                            size: 15,
+                            color: accentColor,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              'Preferee pour ${mission.requestedAmbulanceNumber}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: accentColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 4),
+                    Text(
+                      mission.missionDate,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isClinicMission
+                            ? const Color(0xFF6D28D9)
+                            : Colors.grey[600],
+                      ),
+                    ),
+                  ],
                 ),
+              ),
               const SizedBox(width: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: isPriority
-                        ? Colors.orange
-                        : (isClinicMission
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: isPriority
+                      ? Colors.orange
+                      : (isClinicMission
                             ? accentColor
                             : (isGuestPatientMission
-                                ? const Color(0xFF0F766E)
-                                : Colors.blue)),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    isPriority
-                        ? 'CRITICAL'
-                        : (isClinicMission
+                                  ? const Color(0xFF0F766E)
+                                  : Colors.blue)),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  isPriority
+                      ? 'CRITICAL'
+                      : (isClinicMission
                             ? 'CLINIC'
-                            : (isGuestPatientMission ? 'PATIENT APP' : 'NORMAL')),
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
+                            : (isGuestPatientMission
+                                  ? 'PATIENT APP'
+                                  : 'NORMAL')),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -624,12 +653,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           const SizedBox(height: 12),
 
           // Locations
-            Row(
-              children: [
-                Icon(Icons.location_on, color: accentColor, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
+          Row(
+            children: [
+              Icon(Icons.location_on, color: accentColor, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
                   mission.pickupDisplayLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -653,6 +682,14 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
               ),
             ],
           ),
+          if (mission.hasPatientRequestDetails) ...[
+            const SizedBox(height: 12),
+            PatientRequestSummaryCard(
+              mission: mission,
+              dense: !isActive,
+              accentColor: accentColor,
+            ),
+          ],
           const SizedBox(height: 12),
 
           // Patient and Details
@@ -683,8 +720,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   icon: const Icon(Icons.phone, size: 16),
                   label: const Text('Appeler Patient'),
                   style: ElevatedButton.styleFrom(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                   ),
@@ -694,17 +733,17 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           const SizedBox(height: 12),
 
           // Payment Status
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: isClinicMission
-                    ? const Color(0xFFF3E8FF)
-                    : (isGuestPatientMission
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: isClinicMission
+                  ? const Color(0xFFF3E8FF)
+                  : (isGuestPatientMission
                         ? const Color(0xFFF0FDFA)
                         : Colors.grey[50]),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
@@ -717,18 +756,20 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                 ),
                 Text(
                   mission.paymentType ?? 'Non spécifié',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[700],
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.grey[700]),
                 ),
               ],
             ),
           ),
 
-            // Action Buttons (for active and pending missions)
-            if (isActive || isPending) ...[
-              const SizedBox(height: 12),
+          if (mission.hasMissionPhoto) ...[
+            const SizedBox(height: 12),
+            _buildMissionPhotoPreview(mission),
+          ],
+
+          // Action Buttons (for active and pending missions)
+          if (isActive || isPending) ...[
+            const SizedBox(height: 12),
             // Accept button (only for pending missions)
             if (isPending)
               SizedBox(
@@ -738,59 +779,61 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                       ? null
                       : () => _showAcceptMissionDialog(context, mission),
                   icon: const Icon(Icons.check_circle, size: 16),
-                  label:
-                      Text(_hasActiveMission ? 'Mission en cours' : 'Accepter'),
+                  label: Text(
+                    _hasActiveMission ? 'Mission en cours' : 'Accepter',
+                  ),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor:
-                        _hasActiveMission ? Colors.grey[400] : Colors.blue,
+                    backgroundColor: _hasActiveMission
+                        ? Colors.grey[400]
+                        : Colors.blue,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 10),
                   ),
                 ),
               ),
-              // Edit button - full width (only for active missions)
-              if (isActive) ...[
-                if (isClinicMission || isGuestPatientMission) ...[
+            // Edit button - full width (only for active missions)
+            if (isActive) ...[
+              if (isClinicMission || isGuestPatientMission) ...[
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _canOpenClinicMissionNavigation(mission)
+                        ? () => _openClinicMissionNavigation(mission)
+                        : null,
+                    icon: const Icon(Icons.navigation, size: 16),
+                    label: Text(
+                      mission.dispatchPhase == 'en_route'
+                          ? 'Trajet vers destination'
+                          : 'Trajet vers patient',
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: accentColor,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                    ),
+                  ),
+                ),
+                if (mission.dispatchPhase != 'en_route') ...[
+                  const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _canOpenClinicMissionNavigation(mission)
-                          ? () => _openClinicMissionNavigation(mission)
-                          : null,
-                      icon: const Icon(Icons.navigation, size: 16),
-                      label: Text(
-                        mission.dispatchPhase == 'en_route'
-                            ? 'Trajet vers destination'
-                            : 'Trajet vers patient',
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: accentColor,
-                        foregroundColor: Colors.white,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _markArrivedAtPickup(mission),
+                      icon: const Icon(Icons.flag, size: 16),
+                      label: const Text('Arrivé au pickup'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: accentColor,
+                        side: BorderSide(color: accentColor),
                         padding: const EdgeInsets.symmetric(vertical: 10),
                       ),
                     ),
                   ),
-                  if (mission.dispatchPhase != 'en_route') ...[
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: OutlinedButton.icon(
-                        onPressed: () => _markArrivedAtPickup(mission),
-                        icon: const Icon(Icons.flag, size: 16),
-                        label: const Text('Arrivé au pickup'),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: accentColor,
-                          side: BorderSide(color: accentColor),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                        ),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 8),
                 ],
-                if (isPending) const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
+                const SizedBox(height: 8),
+              ],
+              if (isPending) const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
                 child: ElevatedButton.icon(
                   onPressed: () => _showEditMissionDataDialog(context, mission),
                   icon: const Icon(Icons.edit, size: 16),
@@ -808,7 +851,11 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () => _showActionConfirmation(
-                          context, 'COMPLETE', 'completed', mission),
+                        context,
+                        'COMPLETE',
+                        'completed',
+                        mission,
+                      ),
                       icon: const Icon(Icons.check, size: 16),
                       label: const Text('Compléter'),
                       style: ElevatedButton.styleFrom(
@@ -822,7 +869,11 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       onPressed: () => _showActionConfirmation(
-                          context, 'CANCEL', 'cancelled', mission),
+                        context,
+                        'CANCEL',
+                        'cancelled',
+                        mission,
+                      ),
                       icon: const Icon(Icons.cancel, size: 16),
                       label: const Text('Annuler'),
                       style: ElevatedButton.styleFrom(
@@ -969,6 +1020,153 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
     );
   }
 
+  Future<String?> _getMissionPhotoSignedUrl(Mission mission) async {
+    final bucket = mission.missionPhotoBucket;
+    final path = mission.missionPhotoPath;
+    if (bucket == null || path == null) {
+      return null;
+    }
+
+    try {
+      return await Supabase.instance.client.storage
+          .from(bucket)
+          .createSignedUrl(path, 3600);
+    } catch (error) {
+      debugPrint('[ActiveMissions] failed to sign mission photo url: $error');
+      return null;
+    }
+  }
+
+  Widget _buildMissionPhotoPreview(Mission mission) {
+    return FutureBuilder<String?>(
+      future: _getMissionPhotoSignedUrl(mission),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Container(
+            height: 90,
+            decoration: BoxDecoration(
+              color: Colors.grey[100],
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        final imageUrl = snapshot.data;
+        if (imageUrl == null || imageUrl.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return InkWell(
+          onTap: () => _showMissionPhotoDialog(context, mission, imageUrl),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    imageUrl,
+                    width: 84,
+                    height: 72,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 84,
+                      height: 72,
+                      color: Colors.grey[200],
+                      child: const Icon(Icons.broken_image_outlined),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Photo jointe',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Touchez pour agrandir la photo du patient.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.open_in_full_rounded, size: 18),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showMissionPhotoDialog(
+    BuildContext context,
+    Mission mission,
+    String imageUrl,
+  ) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Photo mission #${mission.missionNumber}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: InteractiveViewer(
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text('Impossible de charger la photo.'),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showAcceptMissionDialog(BuildContext context, Mission mission) {
     final driverNameController = TextEditingController(text: widget.user.name);
     final scaffoldMessenger = ScaffoldMessenger.of(context);
@@ -980,8 +1178,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           .where((member) => selectedTeammateIds.contains(member.id))
           .map((member) => member.name)
           .toList();
-      driverNameController.text = <String>[widget.user.name, ...teammateNames]
-          .join(', ');
+      driverNameController.text = <String>[
+        widget.user.name,
+        ...teammateNames,
+      ].join(', ');
     }
 
     showDialog(
@@ -991,69 +1191,74 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         builder: (context, setDialogState) {
           return AlertDialog(
             title: const Text('Accepter la Mission'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Mission: #${mission.missionNumber}'),
-                const SizedBox(height: 12),
-                Text('De: ${mission.pickupDisplayLabel}'),
-                if (mission.isGuestPatientMission &&
-                    mission.requestedAmbulanceNumber != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    'Preferee pour: ${mission.requestedAmbulanceNumber}',
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Text('Vers: ${mission.toLocation}'),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: driverNameController,
-                  enabled: false,
-                  decoration: const InputDecoration(
-                    labelText: 'Nom du chauffeur',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                if (_companyStaff.isNotEmpty) ...[
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Mission: #${mission.missionNumber}'),
                   const SizedBox(height: 12),
-                  Text(
-                    'Ajouter d\'autres utilisateurs de la société',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                  Text('De: ${mission.pickupDisplayLabel}'),
+                  if (mission.isGuestPatientMission &&
+                      mission.requestedAmbulanceNumber != null) ...[
+                    const SizedBox(height: 8),
+                    Text('Preferee pour: ${mission.requestedAmbulanceNumber}'),
+                  ],
                   const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _companyStaff
-                        .map(
-                          (member) => FilterChip(
-                            label: Text(member.name),
-                            selected: selectedTeammateIds.contains(member.id),
-                            onSelected: isAccepting
-                                ? null
-                                : (selected) {
-                                    setDialogState(() {
-                                      if (selected) {
-                                        selectedTeammateIds.add(member.id);
-                                      } else {
-                                        selectedTeammateIds.remove(member.id);
-                                      }
-                                      updateDriverNames();
-                                    });
-                                  },
-                          ),
-                        )
-                        .toList(),
+                  Text('Vers: ${mission.toLocation}'),
+                  if (mission.hasMissionPhoto) ...[
+                    const SizedBox(height: 14),
+                    _buildMissionPhotoPreview(mission),
+                  ],
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: driverNameController,
+                    enabled: false,
+                    decoration: const InputDecoration(
+                      labelText: 'Nom du chauffeur',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
+                  if (_companyStaff.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Ajouter d\'autres utilisateurs de la société',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: _companyStaff
+                          .map(
+                            (member) => FilterChip(
+                              label: Text(member.name),
+                              selected: selectedTeammateIds.contains(member.id),
+                              onSelected: isAccepting
+                                  ? null
+                                  : (selected) {
+                                      setDialogState(() {
+                                        if (selected) {
+                                          selectedTeammateIds.add(member.id);
+                                        } else {
+                                          selectedTeammateIds.remove(member.id);
+                                        }
+                                        updateDriverNames();
+                                      });
+                                    },
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
             actions: [
               TextButton(
-                onPressed:
-                    isAccepting ? null : () => Navigator.pop(dialogContext),
+                onPressed: isAccepting
+                    ? null
+                    : () => Navigator.pop(dialogContext),
                 child: const Text('Annuler'),
               ),
               ElevatedButton(
@@ -1063,8 +1268,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                         if (driverNameController.text.isEmpty) {
                           scaffoldMessenger.showSnackBar(
                             const SnackBar(
-                              content:
-                                  Text('Veuillez entrer le nom du chauffeur'),
+                              content: Text(
+                                'Veuillez entrer le nom du chauffeur',
+                              ),
                               backgroundColor: Colors.orange,
                             ),
                           );
@@ -1079,21 +1285,27 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           scaffoldMessenger.showSnackBar(
                             const SnackBar(
                               content: Text(
-                                  '✋ Acceptation de la mission en cours...'),
+                                '✋ Acceptation de la mission en cours...',
+                              ),
                               duration: Duration(seconds: 2),
                             ),
                           );
 
                           print(
-                              '🟠 [ActiveMissions] Mission acceptance started');
+                            '🟠 [ActiveMissions] Mission acceptance started',
+                          );
                           print(
-                              '🟠 [ActiveMissions] Mission ID: ${mission.id}');
+                            '🟠 [ActiveMissions] Mission ID: ${mission.id}',
+                          );
                           print(
-                              '🟠 [ActiveMissions] Mission Number: ${mission.missionNumber}');
+                            '🟠 [ActiveMissions] Mission Number: ${mission.missionNumber}',
+                          );
                           print(
-                              '🟠 [ActiveMissions] Ambulance ID passed: ${widget.ambulanceId}');
+                            '🟠 [ActiveMissions] Ambulance ID passed: ${widget.ambulanceId}',
+                          );
                           print(
-                              '🟠 [ActiveMissions] Driver Name: ${driverNameController.text}');
+                            '🟠 [ActiveMissions] Driver Name: ${driverNameController.text}',
+                          );
 
                           // Accept mission (update status to 'active')
                           await _missionService.acceptMission(
@@ -1103,11 +1315,13 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           );
 
                           print(
-                              '🟠 [ActiveMissions] ✅ Mission accepted successfully');
+                            '🟠 [ActiveMissions] ✅ Mission accepted successfully',
+                          );
 
                           // Add delay to ensure backend sync before reload
                           await Future.delayed(
-                              const Duration(milliseconds: 500));
+                            const Duration(milliseconds: 500),
+                          );
 
                           // Reload missions after successful update
                           if (mounted) {
@@ -1119,7 +1333,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                             scaffoldMessenger.showSnackBar(
                               SnackBar(
                                 content: Text(
-                                    '✅ Mission #${mission.missionNumber} acceptée! Bienvenue ${driverNameController.text}'),
+                                  '✅ Mission #${mission.missionNumber} acceptée! Bienvenue ${driverNameController.text}',
+                                ),
                                 backgroundColor: Colors.green,
                                 duration: const Duration(seconds: 3),
                               ),
@@ -1127,12 +1342,14 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           }
                         } catch (e) {
                           print(
-                              '🔴 [ActiveMissions] ERROR accepting mission: ${e.toString()}');
+                            '🔴 [ActiveMissions] ERROR accepting mission: ${e.toString()}',
+                          );
                           if (mounted) {
                             scaffoldMessenger.showSnackBar(
                               SnackBar(
                                 content: Text(
-                                    '❌ Erreur lors de l\'acceptation: ${e.toString()}'),
+                                  '❌ Erreur lors de l\'acceptation: ${e.toString()}',
+                                ),
                                 backgroundColor: Colors.red,
                               ),
                             );
@@ -1148,8 +1365,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                         height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Accepter'),
@@ -1162,7 +1380,11 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   void _showActionConfirmation(
-      BuildContext context, String action, String newStatus, Mission mission) {
+    BuildContext context,
+    String action,
+    String newStatus,
+    Mission mission,
+  ) {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
     bool isProcessing = false;
 
@@ -1176,54 +1398,58 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
             content: Text('Êtes-vous sûr de vouloir ${action.toLowerCase()}?'),
             actions: [
               TextButton(
-                onPressed:
-                    isProcessing ? null : () => Navigator.pop(dialogContext),
+                onPressed: isProcessing
+                    ? null
+                    : () => Navigator.pop(dialogContext),
                 child: const Text('Annuler'),
               ),
               ElevatedButton(
                 onPressed: isProcessing
-                      ? null
-                      : () async {
-                          setDialogState(() => isProcessing = true);
-                          Navigator.pop(dialogContext);
+                    ? null
+                    : () async {
+                        setDialogState(() => isProcessing = true);
+                        Navigator.pop(dialogContext);
 
-                          try {
-                            scaffoldMessenger.showSnackBar(
-                              SnackBar(
-                                content: Text('⏳ ${action} en cours...'),
-                                duration: const Duration(seconds: 2),
-                              ),
-                            );
+                        try {
+                          scaffoldMessenger.showSnackBar(
+                            SnackBar(
+                              content: Text('⏳ ${action} en cours...'),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
 
                           await _missionService.updateMissionStatus(
-                              mission.id, newStatus);
+                            mission.id,
+                            newStatus,
+                          );
 
                           // Add delay to ensure backend sync before reload
                           await Future.delayed(
-                              const Duration(milliseconds: 500));
+                            const Duration(milliseconds: 500),
+                          );
 
                           // Reload missions after successful update
                           if (mounted) {
-                              _loadMissions();
-                            }
+                            _loadMissions();
+                          }
 
-                            if (mounted) {
-                              scaffoldMessenger.showSnackBar(
-                                SnackBar(
-                                  content: Text('✅ ${action} réussie!'),
-                                  backgroundColor: Colors.green,
-                                  duration: const Duration(seconds: 2),
-                                ),
+                          if (mounted) {
+                            scaffoldMessenger.showSnackBar(
+                              SnackBar(
+                                content: Text('✅ ${action} réussie!'),
+                                backgroundColor: Colors.green,
+                                duration: const Duration(seconds: 2),
+                              ),
                             );
-                            }
-                          } catch (e) {
-                            if (mounted) {
-                              scaffoldMessenger.showSnackBar(
-                                SnackBar(
-                                  content: Text('❌ Erreur: ${e.toString()}'),
-                                  backgroundColor: Colors.red,
-                                ),
-                              );
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            scaffoldMessenger.showSnackBar(
+                              SnackBar(
+                                content: Text('❌ Erreur: ${e.toString()}'),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
                           }
                         }
                       },
@@ -1236,8 +1462,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                         height: 20,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(Colors.white),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.white,
+                          ),
                         ),
                       )
                     : const Text('Confirmer'),
@@ -1250,10 +1477,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Future<void> _makePhoneCall(String phoneNumber) async {
-    final Uri launchUri = Uri(
-      scheme: 'tel',
-      path: phoneNumber,
-    );
+    final Uri launchUri = Uri(scheme: 'tel', path: phoneNumber);
     try {
       await launchUrl(launchUri);
     } catch (e) {
@@ -1268,8 +1492,13 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
     }
   }
 
-  void _showEditDialog(BuildContext context, String title, String initialValue,
-      String fieldKey, Mission mission) {
+  void _showEditDialog(
+    BuildContext context,
+    String title,
+    String initialValue,
+    String fieldKey,
+    Mission mission,
+  ) {
     final controller = TextEditingController(text: initialValue);
 
     showDialog(
@@ -1280,9 +1509,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           controller: controller,
           decoration: InputDecoration(
             hintText: 'Entrez $title',
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           ),
           maxLines: 3,
         ),
@@ -1304,7 +1531,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Future<void> _updateMissionField(
-      Mission mission, String fieldKey, String newValue) async {
+    Mission mission,
+    String fieldKey,
+    String newValue,
+  ) async {
     try {
       await _missionService.updateMissionField(mission.id, fieldKey, newValue);
 
@@ -1351,7 +1581,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Statut du paiement mis à jour en ${newStatus ? 'PAYÉ' : 'NON PAYÉ'}'),
+              'Statut du paiement mis à jour en ${newStatus ? 'PAYÉ' : 'NON PAYÉ'}',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -1384,9 +1615,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
               Navigator.pop(dialogContext);
               _updatePaymentStatus(mission, true);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
             child: const Text('Marquer comme PAYÉ'),
           ),
           ElevatedButton(
@@ -1394,9 +1623,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
               Navigator.pop(dialogContext);
               _updatePaymentStatus(mission, false);
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Marquer comme NON PAYÉ'),
           ),
         ],
@@ -1470,9 +1697,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                       Text(
                         '🔐 Garantie (Obligatoire)',
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.red[700],
-                            ),
+                          fontWeight: FontWeight.w600,
+                          color: Colors.red[700],
+                        ),
                       ),
                       const SizedBox(height: 8),
                       TextField(
@@ -1483,12 +1710,16 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(
-                                color: Colors.orange, width: 2),
+                              color: Colors.orange,
+                              width: 2,
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: const BorderSide(
-                                color: Colors.orange, width: 2),
+                              color: Colors.orange,
+                              width: 2,
+                            ),
                           ),
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -1554,7 +1785,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Statut du paiement mis à jour en ${isPaid ? 'PAYÉ' : 'NON PAYÉ'}'),
+              'Statut du paiement mis à jour en ${isPaid ? 'PAYÉ' : 'NON PAYÉ'}',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -1572,7 +1804,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Future<void> _updatePaymentTypeWithGuarantee(
-      Mission mission, String paymentType, String guarantee) async {
+    Mission mission,
+    String paymentType,
+    String guarantee,
+  ) async {
     try {
       // Update payment type
       await _missionService.updateMissionField(
@@ -1654,7 +1889,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   }
 
   Future<void> _generateMissionPDF(
-      BuildContext context, Mission mission) async {
+    BuildContext context,
+    Mission mission,
+  ) async {
     try {
       // Show loading indicator
       if (mounted) {
@@ -1683,8 +1920,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content:
-                Text('Erreur lors de la génération du PDF: ${e.toString()}'),
+            content: Text(
+              'Erreur lors de la génération du PDF: ${e.toString()}',
+            ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -1723,7 +1961,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-                'Erreur lors de la génération de la facture: ${e.toString()}'),
+              'Erreur lors de la génération de la facture: ${e.toString()}',
+            ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 3),
           ),
@@ -1734,16 +1973,21 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
 
   void _showEditMissionDataDialog(BuildContext context, Mission mission) {
     final formKey = GlobalKey<FormState>();
-    final fromLocationManualCtrl =
-        TextEditingController(text: mission.fromLocation);
-    final toLocationManualCtrl =
-        TextEditingController(text: mission.toLocation);
-    final patientNameCtrl =
-        TextEditingController(text: mission.patientName ?? '');
-    final patientPhoneCtrl =
-        TextEditingController(text: mission.patientPhone ?? '');
-    final infirmierNameCtrl =
-        TextEditingController(text: mission.infirmierName ?? '');
+    final fromLocationManualCtrl = TextEditingController(
+      text: mission.fromLocation,
+    );
+    final toLocationManualCtrl = TextEditingController(
+      text: mission.toLocation,
+    );
+    final patientNameCtrl = TextEditingController(
+      text: mission.patientName ?? '',
+    );
+    final patientPhoneCtrl = TextEditingController(
+      text: mission.patientPhone ?? '',
+    );
+    final infirmierNameCtrl = TextEditingController(
+      text: mission.infirmierName ?? '',
+    );
     final notesCtrl = TextEditingController(text: mission.notes ?? '');
     final tarifCtrl = TextEditingController(text: mission.missionPrice ?? '');
     final guaranteeCtrl = TextEditingController(text: mission.guarantee ?? '');
@@ -1817,7 +2061,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           onSelected: (selected) {
                             if (selected) {
                               setDialogState(
-                                  () => selectedFromLocationType = 'domicile');
+                                () => selectedFromLocationType = 'domicile',
+                              );
                             }
                           },
                         ),
@@ -1830,7 +2075,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           onSelected: (selected) {
                             if (selected) {
                               setDialogState(
-                                  () => selectedFromLocationType = 'clinic');
+                                () => selectedFromLocationType = 'clinic',
+                              );
                             }
                           },
                         ),
@@ -1843,10 +2089,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                     DropdownButton<String>(
                       value: selectedFromCity,
                       items: cities
-                          .map((city) => DropdownMenuItem(
-                                value: city,
-                                child: Text(city),
-                              ))
+                          .map(
+                            (city) => DropdownMenuItem(
+                              value: city,
+                              child: Text(city),
+                            ),
+                          )
                           .toList(),
                       onChanged: (value) {
                         setDialogState(() {
@@ -1898,7 +2146,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           onSelected: (selected) {
                             if (selected) {
                               setDialogState(
-                                  () => selectedToLocationType = 'domicile');
+                                () => selectedToLocationType = 'domicile',
+                              );
                             }
                           },
                         ),
@@ -1911,7 +2160,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                           onSelected: (selected) {
                             if (selected) {
                               setDialogState(
-                                  () => selectedToLocationType = 'clinic');
+                                () => selectedToLocationType = 'clinic',
+                              );
                             }
                           },
                         ),
@@ -1924,10 +2174,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                     DropdownButton<String>(
                       value: selectedToCity,
                       items: cities
-                          .map((city) => DropdownMenuItem(
-                                value: city,
-                                child: Text(city),
-                              ))
+                          .map(
+                            (city) => DropdownMenuItem(
+                              value: city,
+                              child: Text(city),
+                            ),
+                          )
                           .toList(),
                       onChanged: (value) {
                         setDialogState(() {
@@ -2073,7 +2325,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                     items: const [
                       DropdownMenuItem(value: 'cash', child: Text('Liquide')),
                       DropdownMenuItem(
-                          value: 'charge', child: Text('Sur Compte')),
+                        value: 'charge',
+                        child: Text('Sur Compte'),
+                      ),
                     ],
                     onChanged: !isLoading
                         ? (value) {
@@ -2135,8 +2389,9 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   const SizedBox(height: 4),
                   TextFormField(
                     controller: tarifCtrl,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
                     decoration: InputDecoration(
                       hintText: 'Montant en dinars',
                       border: OutlineInputBorder(
@@ -2159,7 +2414,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                         onChanged: !isLoading
                             ? (value) {
                                 setDialogState(
-                                    () => selectedIsPaid = value ?? false);
+                                  () => selectedIsPaid = value ?? false,
+                                );
                               }
                             : null,
                       ),
@@ -2202,12 +2458,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                         // Determine final locations based on selected type
                         String finalFromLocation =
                             selectedFromLocationType == 'clinic'
-                                ? selectedFromClinic
-                                : fromLocationManualCtrl.text;
+                            ? selectedFromClinic
+                            : fromLocationManualCtrl.text;
                         String finalToLocation =
                             selectedToLocationType == 'clinic'
-                                ? selectedToClinic
-                                : toLocationManualCtrl.text;
+                            ? selectedToClinic
+                            : toLocationManualCtrl.text;
 
                         await _saveMissionEdits(
                           mission,
@@ -2264,55 +2520,99 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           .split(RegExp(r'\s+'))
           .where((part) => part.trim().isNotEmpty)
           .toList();
-      final normalizedPatientFirstName =
-          patientNameParts.isNotEmpty ? patientNameParts.first : null;
+      final normalizedPatientFirstName = patientNameParts.isNotEmpty
+          ? patientNameParts.first
+          : null;
       final normalizedPatientLastName = patientNameParts.length > 1
           ? patientNameParts.skip(1).join(' ')
           : null;
       final normalizedInfirmierName = infirmierName.trim();
       final normalizedNotes = notes.trim();
       final normalizedGuarantee = guarantee.trim();
-      final normalizedMissionPriceInput = missionPrice.trim().replaceAll(',', '.');
-      final normalizedMissionPrice =
-          normalizedMissionPriceInput.isEmpty
-              ? 0
-              : (num.tryParse(normalizedMissionPriceInput) ?? 0);
+      final normalizedMissionPriceInput = missionPrice.trim().replaceAll(
+        ',',
+        '.',
+      );
+      final normalizedMissionPrice = normalizedMissionPriceInput.isEmpty
+          ? 0
+          : (num.tryParse(normalizedMissionPriceInput) ?? 0);
 
       // Update all fields
       await _missionService.updateMissionField(
-          mission.id, 'from_location', normalizedFromLocation);
+        mission.id,
+        'from_location',
+        normalizedFromLocation,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'pickup_address', normalizedFromLocation);
+        mission.id,
+        'pickup_address',
+        normalizedFromLocation,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'to_location', normalizedToLocation);
+        mission.id,
+        'to_location',
+        normalizedToLocation,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'destination_address', normalizedToLocation);
+        mission.id,
+        'destination_address',
+        normalizedToLocation,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'patient_name', normalizedPatientName);
+        mission.id,
+        'patient_name',
+        normalizedPatientName,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'patient_first_name', normalizedPatientFirstName);
+        mission.id,
+        'patient_first_name',
+        normalizedPatientFirstName,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'patient_last_name', normalizedPatientLastName);
+        mission.id,
+        'patient_last_name',
+        normalizedPatientLastName,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'patient_phone', normalizedPatientPhone);
+        mission.id,
+        'patient_phone',
+        normalizedPatientPhone,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'infirmier_name', normalizedInfirmierName);
+        mission.id,
+        'infirmier_name',
+        normalizedInfirmierName,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'notes', normalizedNotes);
+        mission.id,
+        'notes',
+        normalizedNotes,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'payment_type', paymentType);
+        mission.id,
+        'payment_type',
+        paymentType,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'mission_price', normalizedMissionPrice);
+        mission.id,
+        'mission_price',
+        normalizedMissionPrice,
+      );
       await _missionService.updateMissionField(
-          mission.id, 'payment_status', isPaid);
+        mission.id,
+        'payment_status',
+        isPaid,
+      );
 
       // Update guarantee if "Sur Compte" is selected
       if (paymentType == 'charge' && normalizedGuarantee.isNotEmpty) {
         await _missionService.updateMissionField(
-            mission.id, 'guarantee', normalizedGuarantee);
+          mission.id,
+          'guarantee',
+          normalizedGuarantee,
+        );
       } else if (paymentType != 'charge') {
-        await _missionService.updateMissionField(
-            mission.id, 'guarantee', null);
+        await _missionService.updateMissionField(mission.id, 'guarantee', null);
       }
 
       // Reload missions

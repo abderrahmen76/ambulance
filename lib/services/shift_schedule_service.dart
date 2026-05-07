@@ -7,13 +7,16 @@ import '../models/user_model.dart';
 class ShiftScheduleService {
   ShiftScheduleService._internal();
 
-  static final ShiftScheduleService _instance = ShiftScheduleService._internal();
+  static final ShiftScheduleService _instance =
+      ShiftScheduleService._internal();
 
   factory ShiftScheduleService() => _instance;
 
   final SupabaseClient _supabase = Supabase.instance.client;
 
-  Future<List<DriverShiftSchedule>> fetchTenantSchedules(String tenantId) async {
+  Future<List<DriverShiftSchedule>> fetchTenantSchedules(
+    String tenantId,
+  ) async {
     final rows = await _supabase
         .from('driver_shift_schedules')
         .select()
@@ -21,9 +24,9 @@ class ShiftScheduleService {
         .eq('is_active', true)
         .order('created_at', ascending: false);
 
-    return List<Map<String, dynamic>>.from(rows)
-        .map(DriverShiftSchedule.fromJson)
-        .toList();
+    return List<Map<String, dynamic>>.from(
+      rows,
+    ).map(DriverShiftSchedule.fromJson).toList();
   }
 
   Future<List<DriverShiftSchedule>> fetchDriverSchedules({
@@ -41,9 +44,9 @@ class ShiftScheduleService {
         .eq('is_active', true)
         .order('created_at', ascending: false);
 
-    final schedules = List<Map<String, dynamic>>.from(rows)
-        .map(DriverShiftSchedule.fromJson)
-        .toList();
+    final schedules = List<Map<String, dynamic>>.from(
+      rows,
+    ).map(DriverShiftSchedule.fromJson).toList();
     debugPrint(
       '[ShiftScheduleService] fetchDriverSchedules found=${schedules.length}',
     );
@@ -56,6 +59,8 @@ class ShiftScheduleService {
     required String createdBy,
     required ShiftRecurrence recurrence,
     required String shiftLabel,
+    String scheduleType = DriverShiftSchedule.typeShift,
+    String? absenceReason,
     required DateTime startsOn,
     DateTime? endsOn,
     int? weekday,
@@ -72,6 +77,8 @@ class ShiftScheduleService {
           'recurrence_type': recurrence.name,
           'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
           'shift_label': shiftLabel,
+          'schedule_type': scheduleType,
+          'absence_reason': absenceReason,
           'starts_on': _dateOnly(startsOn),
           'ends_on': endsOn == null ? null : _dateOnly(endsOn),
           'start_time': startTime,
@@ -91,6 +98,8 @@ class ShiftScheduleService {
   Future<DriverShiftSchedule> updateSchedule({
     required String scheduleId,
     required String shiftLabel,
+    required String scheduleType,
+    String? absenceReason,
     required ShiftRecurrence recurrence,
     required DateTime startsOn,
     DateTime? endsOn,
@@ -104,6 +113,8 @@ class ShiftScheduleService {
         .from('driver_shift_schedules')
         .update({
           'shift_label': shiftLabel,
+          'schedule_type': scheduleType,
+          'absence_reason': absenceReason,
           'recurrence_type': recurrence.name,
           'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
           'starts_on': _dateOnly(startsOn),
@@ -124,10 +135,13 @@ class ShiftScheduleService {
   }
 
   Future<void> deactivateSchedule(String scheduleId) async {
-    await _supabase.from('driver_shift_schedules').update({
-      'is_active': false,
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', scheduleId);
+    await _supabase
+        .from('driver_shift_schedules')
+        .update({
+          'is_active': false,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .eq('id', scheduleId);
   }
 
   DriverShiftSchedule? findActiveSchedule(
@@ -135,7 +149,7 @@ class ShiftScheduleService {
     DateTime moment,
   ) {
     for (final schedule in schedules) {
-      if (schedule.isActiveAt(moment)) {
+      if (schedule.isWorkingShift && schedule.isActiveAt(moment)) {
         return schedule;
       }
     }
@@ -150,7 +164,7 @@ class ShiftScheduleService {
     var bestDeltaMinutes = 1 << 30;
 
     for (final schedule in schedules) {
-      if (!schedule.isActive) continue;
+      if (!schedule.isActive || !schedule.isWorkingShift) continue;
       final delta = schedule.minutesUntilNextStart(moment);
       if (delta == null) continue;
       if (delta < bestDeltaMinutes) {
@@ -174,7 +188,10 @@ class ShiftScheduleService {
     List<DriverShiftSchedule> schedules,
     DateTime date,
   ) {
-    final visible = schedulesForDate(schedules, date);
+    final visible = schedulesForDate(
+      schedules,
+      date,
+    ).where((schedule) => schedule.isWorkingShift).toList();
     final conflicts = <ShiftConflict>[];
     final byDriver = <String, List<DriverShiftSchedule>>{};
 
@@ -226,6 +243,7 @@ class DriverShiftSchedule {
     required this.driverName,
     required this.recurrenceType,
     required this.shiftLabel,
+    required this.scheduleType,
     required this.startsOn,
     required this.startTime,
     required this.endTime,
@@ -234,7 +252,14 @@ class DriverShiftSchedule {
     required this.createdAt,
     this.weekday,
     this.endsOn,
+    this.absenceReason,
   });
+
+  static const String typeShift = 'shift';
+  static const String typeRest = 'rest';
+  static const String typeWeekend = 'weekend';
+  static const String typeLeave = 'leave';
+  static const String typeSickLeave = 'sick_leave';
 
   final String id;
   final String tenantId;
@@ -243,6 +268,8 @@ class DriverShiftSchedule {
   final ShiftRecurrence recurrenceType;
   final int? weekday;
   final String shiftLabel;
+  final String scheduleType;
+  final String? absenceReason;
   final DateTime startsOn;
   final DateTime? endsOn;
   final String startTime;
@@ -253,6 +280,32 @@ class DriverShiftSchedule {
 
   int get startMinutes => _toMinutes(startTime);
   int get endMinutes => _toMinutes(endTime);
+  bool get isWorkingShift => scheduleType == typeShift;
+  bool get isAbsence => !isWorkingShift;
+
+  String get scheduleTypeLabel {
+    switch (scheduleType) {
+      case typeRest:
+        return 'Repos';
+      case typeWeekend:
+        return 'Weekend';
+      case typeLeave:
+        return 'Congé';
+      case typeSickLeave:
+        return 'Maladie';
+      default:
+        return 'Garde';
+    }
+  }
+
+  String get displayLabel {
+    if (isWorkingShift) return shiftLabel;
+    final reason = absenceReason?.trim();
+    if (reason != null && reason.isNotEmpty) {
+      return '$scheduleTypeLabel - $reason';
+    }
+    return shiftLabel.trim().isEmpty ? scheduleTypeLabel : shiftLabel;
+  }
 
   bool appliesOn(DateTime date) {
     final day = DateTime(date.year, date.month, date.day);
@@ -276,7 +329,7 @@ class DriverShiftSchedule {
   }
 
   bool isActiveAt(DateTime moment) {
-    if (!isActive || !appliesOn(moment)) {
+    if (!isWorkingShift || !isActive || !appliesOn(moment)) {
       return false;
     }
 
@@ -290,8 +343,12 @@ class DriverShiftSchedule {
   }
 
   String get timeRangeLabel => '$startTime - $endTime';
+  String get displayTimeRangeLabel =>
+      isWorkingShift ? timeRangeLabel : 'Toute la journée';
 
   int? minutesUntilNextStart(DateTime moment) {
+    if (!isWorkingShift) return null;
+
     final today = DateTime(moment.year, moment.month, moment.day);
     for (var offset = 0; offset < 14; offset++) {
       final day = today.add(Duration(days: offset));
@@ -322,13 +379,16 @@ class DriverShiftSchedule {
       driverName: (json['driver_name'] ?? 'Driver').toString(),
       recurrenceType:
           (json['recurrence_type'] ?? 'daily').toString() == 'weekly'
-              ? ShiftRecurrence.weekly
-              : ShiftRecurrence.daily,
+          ? ShiftRecurrence.weekly
+          : ShiftRecurrence.daily,
       weekday: json['weekday'] == null
           ? null
           : int.tryParse(json['weekday'].toString()),
       shiftLabel: (json['shift_label'] ?? 'Shift').toString(),
-      startsOn: DateTime.tryParse((json['starts_on'] ?? '').toString()) ??
+      scheduleType: (json['schedule_type'] ?? typeShift).toString(),
+      absenceReason: json['absence_reason']?.toString(),
+      startsOn:
+          DateTime.tryParse((json['starts_on'] ?? '').toString()) ??
           DateTime.now(),
       endsOn: json['ends_on'] == null
           ? null
@@ -337,7 +397,8 @@ class DriverShiftSchedule {
       endTime: (json['end_time'] ?? '16:00').toString(),
       autoStartTracking: json['auto_start_tracking'] == true,
       isActive: json['is_active'] != false,
-      createdAt: DateTime.tryParse((json['created_at'] ?? '').toString()) ??
+      createdAt:
+          DateTime.tryParse((json['created_at'] ?? '').toString()) ??
           DateTime.now(),
     );
   }

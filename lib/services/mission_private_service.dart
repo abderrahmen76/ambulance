@@ -85,6 +85,7 @@ class MissionPrivateService {
     required Map<String, dynamic> vitalSigns,
     required List<String> medicalHistory,
     required dynamic patientNeeds,
+    required List<Map<String, String>> medications,
     String? clinicalNotes,
   }) async {
     await _sessionSecurityService.ensureFreshSession();
@@ -118,6 +119,7 @@ class MissionPrivateService {
           'vital_signs': vitalSigns,
           'medical_history': medicalHistory,
           'patient_needs': patientNeeds,
+          'medications': medications,
           'clinical_notes': clinicalNotes,
         },
       },

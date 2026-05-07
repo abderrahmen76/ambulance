@@ -1,6 +1,7 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -15,16 +16,22 @@ class PdfService {
           '[PdfService] Generating PDF for mission: ${mission.missionNumber}');
 
       final pdf = pw.Document();
+      final documentFont = await _loadDocumentFont();
 
       // Get parsed data (already parsed from JSON in Mission model)
       final medicalHistory = mission.medicalHistory ?? [];
       final vitalSigns = mission.vitalSigns ?? {};
       final patientNeeds = mission.patientNeeds ?? {};
+      final medications = mission.medications ?? <Map<String, dynamic>>[];
 
       pdf.addPage(
         pw.MultiPage(
           pageFormat: PdfPageFormat.a4,
           margin: const pw.EdgeInsets.all(9),
+          theme: pw.ThemeData.withFont(
+            base: documentFont,
+            bold: documentFont,
+          ),
           header: (context) => _buildHeader(mission),
           footer: (context) => _buildFooter(context),
           build: (context) => [
@@ -42,9 +49,13 @@ class PdfService {
             if (mission.reportType != 'deceased') ...[
               _buildLocationsSection(mission),
               pw.SizedBox(height: 2),
-              if (mission.reportType != null && mission.reportType!.isNotEmpty)
+              if ((mission.reportType != null && mission.reportType!.isNotEmpty) ||
+                  medicalHistory.isNotEmpty ||
+                  vitalSigns.isNotEmpty ||
+                  patientNeeds.isNotEmpty ||
+                  medications.isNotEmpty)
                 _buildTechnicalSheetSection(
-                    mission, medicalHistory, vitalSigns, patientNeeds),
+                    mission, medicalHistory, vitalSigns, patientNeeds, medications),
             ],
           ],
         ),
@@ -56,12 +67,13 @@ class PdfService {
 
       // Try to share/print the PDF with multiple fallback strategies
       bool pdfShared = false;
+      final exportTimestamp = DateTime.now().millisecondsSinceEpoch;
 
       // Strategy 1: Try sharePdf
       try {
         await Printing.sharePdf(
           bytes: pdfBytes,
-          filename: 'Mission_${mission.missionNumber}.pdf',
+          filename: 'Mission_${mission.missionNumber}_${exportTimestamp}.pdf',
         );
         debugPrint('[PdfService] PDF shared successfully with sharePdf');
         pdfShared = true;
@@ -74,7 +86,7 @@ class PdfService {
         try {
           await Printing.layoutPdf(
             onLayout: (PdfPageFormat format) async => pdfBytes,
-            name: 'Mission_${mission.missionNumber}.pdf',
+            name: 'Mission_${mission.missionNumber}_${exportTimestamp}.pdf',
           );
           debugPrint('[PdfService] PDF opened with layoutPdf');
           pdfShared = true;
@@ -205,7 +217,7 @@ class PdfService {
             ),
             pw.Expanded(
               flex: 1,
-              child: _buildTinyInfoRow('Âge', mission.patientAge ?? 'N/A'),
+              child: _buildTinyInfoRow('Age', mission.patientAge ?? 'N/A'),
             ),
           ],
         ),
@@ -219,12 +231,21 @@ class PdfService {
       children: [
         _buildSectionTitle('RAPPORT'),
         pw.SizedBox(height: 8),
-        _buildInfoRow('Statut', 'Décédé'),
+        _buildInfoRow('Statut', 'Decede'),
       ],
     );
   }
 
   static pw.Widget _buildLocationsSection(Mission mission) {
+    final routeFrom = _resolveLocationText(
+      primary: mission.pickupAddress,
+      fallback: mission.fromLocation,
+    );
+    final routeTo = _resolveLocationText(
+      primary: mission.destinationAddress,
+      fallback: mission.toLocation,
+    );
+
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -243,8 +264,10 @@ class PdfService {
             ),
             pw.Expanded(
               child: pw.Text(
-                mission.fromLocation,
+                _preparePdfText(routeFrom),
                 style: const pw.TextStyle(fontSize: 8.5),
+                textAlign:
+                    _containsArabic(routeFrom) ? pw.TextAlign.right : pw.TextAlign.left,
               ),
             ),
           ],
@@ -263,8 +286,10 @@ class PdfService {
             ),
             pw.Expanded(
               child: pw.Text(
-                mission.toLocation,
+                _preparePdfText(routeTo),
                 style: const pw.TextStyle(fontSize: 8.5),
+                textAlign:
+                    _containsArabic(routeTo) ? pw.TextAlign.right : pw.TextAlign.left,
               ),
             ),
           ],
@@ -278,6 +303,7 @@ class PdfService {
     List<String> medicalHistory,
     Map<String, dynamic> vitalSigns,
     Map<String, dynamic> patientNeeds,
+    List<Map<String, dynamic>> medications,
   ) {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -315,10 +341,14 @@ class PdfService {
               children: [
                 pw.Padding(
                   padding: const pw.EdgeInsets.all(3),
-                  child: pw.Text('ANTÉCÉDENTS',
-                      textAlign: pw.TextAlign.center,
-                      style: pw.TextStyle(
-                          fontSize: 9, fontWeight: pw.FontWeight.bold)),
+                  child: pw.Text(
+                    'ANTECEDENTS',
+                    textAlign: pw.TextAlign.center,
+                    style: pw.TextStyle(
+                      fontSize: 9,
+                      fontWeight: pw.FontWeight.bold,
+                    ),
+                  ),
                 ),
                 pw.Padding(
                   padding: const pw.EdgeInsets.all(3),
@@ -345,8 +375,11 @@ class PdfService {
                           crossAxisAlignment: pw.CrossAxisAlignment.start,
                           children: medicalHistory.map((item) {
                             return pw.Text(
-                              _formatMedicalHistoryLabel(item),
+                              _preparePdfText(_formatMedicalHistoryLabel(item)),
                               style: const pw.TextStyle(fontSize: 8.5),
+                              textAlign: _containsArabic(item)
+                                  ? pw.TextAlign.right
+                                  : pw.TextAlign.left,
                             );
                           }).toList(),
                         )
@@ -371,6 +404,47 @@ class PdfService {
             ),
           ],
         ),
+        if (medications.isNotEmpty) ...[
+          pw.SizedBox(height: 6),
+          _buildMedicationsSection(medications),
+        ],
+      ],
+    );
+  }
+
+  static pw.Widget _buildMedicationsSection(
+    List<Map<String, dynamic>> medications,
+  ) {
+    return pw.Table(
+      border: pw.TableBorder.all(
+        color: PdfColors.grey300,
+        width: 0.5,
+      ),
+      columnWidths: {
+        0: const pw.FlexColumnWidth(1.3),
+        1: const pw.FlexColumnWidth(1),
+        2: const pw.FlexColumnWidth(1),
+      },
+      children: [
+        pw.TableRow(
+          decoration: pw.BoxDecoration(color: PdfColors.grey200),
+          children: [
+            _buildTableHeaderCell('MEDICAMENT'),
+            _buildTableHeaderCell('DOSAGE'),
+            _buildTableHeaderCell('FREQUENCE'),
+          ],
+        ),
+        ...medications.map((medication) {
+          return pw.TableRow(
+            children: [
+              _buildTableValueCell(medication['name']?.toString() ?? 'N/A'),
+              _buildTableValueCell(medication['dosage']?.toString() ?? 'N/A'),
+              _buildTableValueCell(
+                medication['frequency']?.toString() ?? 'N/A',
+              ),
+            ],
+          );
+        }),
       ],
     );
   }
@@ -394,10 +468,12 @@ class PdfService {
       final after = vitalSigns[afterKey]?.toString().trim() ?? '';
       if ((before.isNotEmpty && before != '0') ||
           (after.isNotEmpty && after != '0')) {
-        items.add(pw.Text(
-          '$label: Avant: ${before.isNotEmpty && before != '0' ? before : 'N/A'} | Après: ${after.isNotEmpty && after != '0' ? after : 'N/A'}',
-          style: const pw.TextStyle(fontSize: 9),
-        ));
+        items.add(
+          pw.Text(
+            '$label: Avant: ${before.isNotEmpty && before != '0' ? before : 'N/A'} | Apres: ${after.isNotEmpty && after != '0' ? after : 'N/A'}',
+            style: const pw.TextStyle(fontSize: 9),
+          ),
+        );
       }
     }
     return items.isNotEmpty
@@ -466,11 +542,11 @@ class PdfService {
             final lowerKey = key.toLowerCase();
             final displayValue = (lowerKey == 'oxygen' ||
                     lowerKey == 'oxygene' ||
-                    lowerKey == 'oxygène')
+                    lowerKey == 'oxygene')
                 ? '$value L'
                 : value;
             debugPrint(
-                '[PDF_OXYGEN_DEBUG] String - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygène'}');
+                '[PDF_OXYGEN_DEBUG] String - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygene'}');
             needsList.add(pw.Padding(
               padding: const pw.EdgeInsets.only(left: 3),
               child: pw.Text('$label: $displayValue',
@@ -481,11 +557,11 @@ class PdfService {
             final lowerKey = key.toLowerCase();
             final displayValue = (lowerKey == 'oxygen' ||
                     lowerKey == 'oxygene' ||
-                    lowerKey == 'oxygène')
+                    lowerKey == 'oxygene')
                 ? '$value L'
                 : value.toString();
             debugPrint(
-                '[PDF_OXYGEN_DEBUG] Int - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygène'}');
+                '[PDF_OXYGEN_DEBUG] Int - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygene'}');
             needsList.add(pw.Padding(
               padding: const pw.EdgeInsets.only(left: 3),
               child: pw.Text('$label: $displayValue',
@@ -496,11 +572,11 @@ class PdfService {
             final lowerKey = key.toLowerCase();
             final displayValue = (lowerKey == 'oxygen' ||
                     lowerKey == 'oxygene' ||
-                    lowerKey == 'oxygène')
+                    lowerKey == 'oxygene')
                 ? '$value L'
                 : value.toString();
             debugPrint(
-                '[PDF_OXYGEN_DEBUG] Double - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygène'}');
+                '[PDF_OXYGEN_DEBUG] Double - key=$key, value=$value, displayValue=$displayValue, isOxygen=${lowerKey == 'oxygen' || lowerKey == 'oxygene' || lowerKey == 'oxygene'}');
             needsList.add(pw.Padding(
               padding: const pw.EdgeInsets.only(left: 3),
               child: pw.Text('$label: $displayValue',
@@ -525,7 +601,7 @@ class PdfService {
               for (var child in children) {
                 if (child is Map<String, dynamic>) {
                   final childName = child['name']?.toString() ?? '';
-                  final childQty = child['quantity']?.toString() ?? '';
+                  final childQty = (child['vitesse'] ?? child['quantity'])?.toString() ?? ''; 
                   final childTime = child['time']?.toString() ?? '';
 
                   String childDisplay = '  $childName';
@@ -547,7 +623,7 @@ class PdfService {
               final lowerKey = key.toLowerCase();
               final suffix = (lowerKey == 'oxygen' ||
                       lowerKey == 'oxygene' ||
-                      lowerKey == 'oxygène')
+                      lowerKey == 'oxygene')
                   ? ' L'
                   : '';
               debugPrint(
@@ -562,7 +638,7 @@ class PdfService {
               final lowerKey = key.toLowerCase();
               final suffix = (lowerKey == 'oxygen' ||
                       lowerKey == 'oxygene' ||
-                      lowerKey == 'oxygène')
+                      lowerKey == 'oxygene')
                   ? ' L'
                   : '';
               debugPrint(
@@ -639,7 +715,7 @@ class PdfService {
                 padding: const pw.EdgeInsets.all(3),
                 child: pw.Text(
                   displayValue,
-                  style: const pw.TextStyle(
+                  style: pw.TextStyle(
                       fontSize: 8.5, fontWeight: pw.FontWeight.bold),
                 ),
               ),
@@ -702,10 +778,10 @@ class PdfService {
           for (var child in children) {
             if (child is Map<String, dynamic>) {
               final childName = child['name']?.toString() ?? '';
-              final childQty = child['quantity']?.toString() ?? '';
+              final childQty = (child['vitesse'] ?? child['quantity'])?.toString() ?? ''; 
               final childTime = child['time']?.toString() ?? '';
 
-              String childDisplay = '  • $childName';
+              String childDisplay = '  - $childName';
               if (childQty.isNotEmpty && childQty != '0') {
                 childDisplay += ' ($childQty)';
               }
@@ -724,7 +800,7 @@ class PdfService {
           final lowerKey = key.toLowerCase();
           final suffix = (lowerKey == 'oxygen' ||
                   lowerKey == 'oxygene' ||
-                  lowerKey == 'oxygène')
+                  lowerKey == 'oxygene')
               ? ' L'
               : '';
           needsList.add(pw.Padding(
@@ -737,7 +813,7 @@ class PdfService {
           final lowerKey = key.toLowerCase();
           final suffix = (lowerKey == 'oxygen' ||
                   lowerKey == 'oxygene' ||
-                  lowerKey == 'oxygène')
+                  lowerKey == 'oxygene')
               ? ' L'
               : '';
           needsList.add(pw.Padding(
@@ -794,7 +870,7 @@ class PdfService {
                 padding: const pw.EdgeInsets.all(4),
                 child: pw.Text(
                   displayValue,
-                  style: const pw.TextStyle(
+                  style: pw.TextStyle(
                       fontSize: 9, fontWeight: pw.FontWeight.bold),
                 ),
               ),
@@ -805,7 +881,7 @@ class PdfService {
     }
 
     if (rows.isEmpty) {
-      return pw.Text('Aucun signe vital enregistré',
+      return pw.Text('Aucun signe vital enregistre',
           style: const pw.TextStyle(fontSize: 9));
     }
 
@@ -820,7 +896,7 @@ class PdfService {
 
   static pw.Widget _buildPatientNeedsText(Map<String, dynamic> patientNeeds) {
     if (patientNeeds.isEmpty) {
-      return pw.Text('Aucun besoin enregistré',
+      return pw.Text('Aucun besoin enregistre',
           style: const pw.TextStyle(fontSize: 9));
     }
 
@@ -829,11 +905,11 @@ class PdfService {
     patientNeeds.forEach((key, value) {
       if (value is String && value.isNotEmpty) {
         // Simple string value (quantity only)
-        needsList.add(pw.Text('• ${_formatNeedLabel(key)}: $value',
+        needsList.add(pw.Text('- ${_formatNeedLabel(key)}: $value',
             style: const pw.TextStyle(fontSize: 10)));
       } else if (value is int) {
         // Integer quantity
-        needsList.add(pw.Text('• ${_formatNeedLabel(key)}: $value',
+        needsList.add(pw.Text('- ${_formatNeedLabel(key)}: $value',
             style: const pw.TextStyle(fontSize: 10)));
       } else if (value is Map<String, dynamic>) {
         // VNI/VC format or PSE with nested data
@@ -843,7 +919,7 @@ class PdfService {
 
         if (children.isNotEmpty) {
           // New format with children (VNI, VC, PSE)
-          String displayText = '• ${_formatNeedLabel(key)}';
+          String displayText = '- ${_formatNeedLabel(key)}';
           if (quantity.isNotEmpty && quantity != '0') {
             displayText += ' ($quantity)';
           }
@@ -855,10 +931,10 @@ class PdfService {
           for (var child in children) {
             if (child is Map<String, dynamic>) {
               final childName = child['name']?.toString() ?? '';
-              final childQty = child['quantity']?.toString() ?? '';
+              final childQty = (child['vitesse'] ?? child['quantity'])?.toString() ?? ''; 
               final childTime = child['time']?.toString() ?? '';
 
-              String childDisplay = '  ◦ $childName';
+              String childDisplay = '  - $childName';
               if (childQty.isNotEmpty && childQty != '0') {
                 childDisplay += ' ($childQty)';
               }
@@ -875,25 +951,25 @@ class PdfService {
           final lowerKey = key.toLowerCase();
           final suffix = (lowerKey == 'oxygen' ||
                   lowerKey == 'oxygene' ||
-                  lowerKey == 'oxygène')
+                  lowerKey == 'oxygene')
               ? ' L'
               : '';
           needsList.add(pw.Text(
-              '• ${_formatNeedLabel(key)}: $quantity$suffix ($type)',
+              '- ${_formatNeedLabel(key)}: $quantity$suffix ($type)',
               style: const pw.TextStyle(fontSize: 10)));
         } else if (quantity.isNotEmpty) {
           // Just quantity
           final lowerKey = key.toLowerCase();
           final suffix = (lowerKey == 'oxygen' ||
                   lowerKey == 'oxygene' ||
-                  lowerKey == 'oxygène')
+                  lowerKey == 'oxygene')
               ? ' L'
               : '';
-          needsList.add(pw.Text('• ${_formatNeedLabel(key)}: $quantity$suffix',
+          needsList.add(pw.Text('- ${_formatNeedLabel(key)}: $quantity$suffix',
               style: const pw.TextStyle(fontSize: 10)));
         } else if (type.isNotEmpty) {
           // Just type
-          needsList.add(pw.Text('• ${_formatNeedLabel(key)}: $type',
+          needsList.add(pw.Text('- ${_formatNeedLabel(key)}: $type',
               style: const pw.TextStyle(fontSize: 10)));
         }
       }
@@ -904,7 +980,7 @@ class PdfService {
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: needsList,
           )
-        : pw.Text('Aucun besoin enregistré',
+        : pw.Text('Aucun besoin enregistre',
             style: const pw.TextStyle(fontSize: 9));
   }
 
@@ -925,7 +1001,7 @@ class PdfService {
             ),
             pw.Expanded(
               flex: 1,
-              child: _buildInfoRow('Méthode', mission.paymentType ?? 'Aucun'),
+              child: _buildInfoRow('Methode', mission.paymentType ?? 'Aucun'),
             ),
           ],
         ),
@@ -969,8 +1045,9 @@ class PdfService {
         ),
         pw.Expanded(
           child: pw.Text(
-            value,
+            _preparePdfText(value),
             style: const pw.TextStyle(fontSize: 10),
+            textAlign: _containsArabic(value) ? pw.TextAlign.right : pw.TextAlign.left,
           ),
         ),
       ],
@@ -990,10 +1067,11 @@ class PdfService {
         ),
         pw.Expanded(
           child: pw.Text(
-            value,
+            _preparePdfText(value),
             style: const pw.TextStyle(fontSize: 8.5),
             maxLines: 1,
             overflow: pw.TextOverflow.clip,
+            textAlign: _containsArabic(value) ? pw.TextAlign.right : pw.TextAlign.left,
           ),
         ),
       ],
@@ -1013,15 +1091,183 @@ class PdfService {
         ),
         pw.Expanded(
           child: pw.Text(
-            value,
+            _preparePdfText(value),
             style: const pw.TextStyle(fontSize: 7.5),
             maxLines: 1,
             overflow: pw.TextOverflow.clip,
+            textAlign: _containsArabic(value) ? pw.TextAlign.right : pw.TextAlign.left,
           ),
         ),
       ],
     );
   }
+
+  static pw.Widget _buildTableHeaderCell(String title) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(3),
+      child: pw.Text(
+        title,
+        textAlign: pw.TextAlign.center,
+        style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold),
+      ),
+    );
+  }
+
+  static pw.Widget _buildTableValueCell(String value) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(3),
+      child: pw.Text(
+        _preparePdfText(value),
+        style: const pw.TextStyle(fontSize: 8.5),
+        textAlign: _containsArabic(value) ? pw.TextAlign.right : pw.TextAlign.left,
+      ),
+    );
+  }
+
+  static Future<pw.Font> _loadDocumentFont() async {
+    final fontData = await rootBundle.load('assets/fonts/arial.ttf');
+    return pw.Font.ttf(fontData);
+  }
+
+  static String _resolveLocationText({
+    required String fallback,
+    String? primary,
+  }) {
+    final preferred = primary?.trim();
+    if (preferred != null && preferred.isNotEmpty) {
+      return preferred;
+    }
+    return fallback.trim().isNotEmpty ? fallback : 'N/A';
+  }
+
+  static bool _containsArabic(String text) {
+    for (final rune in text.runes) {
+      if ((rune >= 0x0600 && rune <= 0x06FF) ||
+          (rune >= 0x0750 && rune <= 0x077F) ||
+          (rune >= 0x08A0 && rune <= 0x08FF)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static String _preparePdfText(String value) {
+    if (!_containsArabic(value)) {
+      return value;
+    }
+    return _shapeArabicText(value);
+  }
+
+  static String _shapeArabicText(String text) {
+    final chars = text.split('');
+    final shaped = <String>[];
+
+    for (var index = 0; index < chars.length; index++) {
+      final char = chars[index];
+
+      if (char == 'Ù„' &&
+          index + 1 < chars.length &&
+          const {'Ø§', 'Ø£', 'Ø¥', 'Ø¢'}.contains(chars[index + 1])) {
+        continue;
+      }
+
+      if (index > 0 &&
+          chars[index - 1] == 'Ù„' &&
+          const {'Ø§', 'Ø£', 'Ø¥', 'Ø¢'}.contains(char)) {
+        final previousIndex = index - 2;
+        final previousChar = previousIndex >= 0 ? chars[previousIndex] : null;
+        final joinPrevious =
+            previousChar != null &&
+            _connectsToLeft(previousChar) &&
+            _connectsFromRight('Ù„');
+        shaped.add(joinPrevious ? '\uFEFC' : '\uFEFB');
+        continue;
+      }
+
+      final forms = _arabicLetterForms[char];
+      if (forms == null) {
+        shaped.add(char);
+        continue;
+      }
+
+      final previousChar = index > 0 ? chars[index - 1] : null;
+      final nextChar = index + 1 < chars.length ? chars[index + 1] : null;
+      final joinPrevious =
+          previousChar != null &&
+          _connectsToLeft(previousChar) &&
+          _connectsFromRight(char);
+      final joinNext =
+          nextChar != null &&
+          _connectsToLeft(char) &&
+          _connectsFromRight(nextChar);
+
+      final isolated = forms[0]!;
+      final terminal = forms[1];
+      final initial = forms[2];
+      final medial = forms[3];
+
+      if (joinPrevious && joinNext && medial != null) {
+        shaped.add(medial);
+      } else if (joinPrevious && terminal != null) {
+        shaped.add(terminal);
+      } else if (joinNext && initial != null) {
+        shaped.add(initial);
+      } else {
+        shaped.add(isolated);
+      }
+    }
+
+    return shaped.reversed.join();
+  }
+
+  static bool _connectsFromRight(String char) {
+    final forms = _arabicLetterForms[char];
+    return forms != null && forms[1] != null;
+  }
+
+  static bool _connectsToLeft(String char) {
+    final forms = _arabicLetterForms[char];
+    return forms != null && forms[2] != null;
+  }
+
+  static const Map<String, List<String?>> _arabicLetterForms = {
+    'Ø¡': ['\uFE80', null, null, null],
+    'Ø¢': ['\uFE81', '\uFE82', null, null],
+    'Ø£': ['\uFE83', '\uFE84', null, null],
+    'Ø¤': ['\uFE85', '\uFE86', null, null],
+    'Ø¥': ['\uFE87', '\uFE88', null, null],
+    'Ø¦': ['\uFE89', '\uFE8A', '\uFE8B', '\uFE8C'],
+    'Ø§': ['\uFE8D', '\uFE8E', null, null],
+    'Ø¨': ['\uFE8F', '\uFE90', '\uFE91', '\uFE92'],
+    'Ø©': ['\uFE93', '\uFE94', null, null],
+    'Øª': ['\uFE95', '\uFE96', '\uFE97', '\uFE98'],
+    'Ø«': ['\uFE99', '\uFE9A', '\uFE9B', '\uFE9C'],
+    'Ø¬': ['\uFE9D', '\uFE9E', '\uFE9F', '\uFEA0'],
+    'Ø­': ['\uFEA1', '\uFEA2', '\uFEA3', '\uFEA4'],
+    'Ø®': ['\uFEA5', '\uFEA6', '\uFEA7', '\uFEA8'],
+    'Ø¯': ['\uFEA9', '\uFEAA', null, null],
+    'Ø°': ['\uFEAB', '\uFEAC', null, null],
+    'Ø±': ['\uFEAD', '\uFEAE', null, null],
+    'Ø²': ['\uFEAF', '\uFEB0', null, null],
+    'Ø³': ['\uFEB1', '\uFEB2', '\uFEB3', '\uFEB4'],
+    'Ø´': ['\uFEB5', '\uFEB6', '\uFEB7', '\uFEB8'],
+    'Øµ': ['\uFEB9', '\uFEBA', '\uFEBB', '\uFEBC'],
+    'Ø¶': ['\uFEBD', '\uFEBE', '\uFEBF', '\uFEC0'],
+    'Ø·': ['\uFEC1', '\uFEC2', '\uFEC3', '\uFEC4'],
+    'Ø¸': ['\uFEC5', '\uFEC6', '\uFEC7', '\uFEC8'],
+    'Ø¹': ['\uFEC9', '\uFECA', '\uFECB', '\uFECC'],
+    'Øº': ['\uFECD', '\uFECE', '\uFECF', '\uFED0'],
+    'Ù': ['\uFED1', '\uFED2', '\uFED3', '\uFED4'],
+    'Ù‚': ['\uFED5', '\uFED6', '\uFED7', '\uFED8'],
+    'Ùƒ': ['\uFED9', '\uFEDA', '\uFEDB', '\uFEDC'],
+    'Ù„': ['\uFEDD', '\uFEDE', '\uFEDF', '\uFEE0'],
+    'Ù…': ['\uFEE1', '\uFEE2', '\uFEE3', '\uFEE4'],
+    'Ù†': ['\uFEE5', '\uFEE6', '\uFEE7', '\uFEE8'],
+    'Ù‡': ['\uFEE9', '\uFEEA', '\uFEEB', '\uFEEC'],
+    'Ùˆ': ['\uFEED', '\uFEEE', null, null],
+    'Ù‰': ['\uFEEF', '\uFEF0', null, null],
+    'ÙŠ': ['\uFEF1', '\uFEF2', '\uFEF3', '\uFEF4'],
+  };
 
   static List<String> _parseJsonList(String? jsonString) {
     if (jsonString == null || jsonString.isEmpty) return [];
@@ -1065,45 +1311,44 @@ class PdfService {
     const labels = {
       'ta': 'TA (mmHg)',
       'fc': 'FC (bpm)',
-      'spo2_before': 'SpO2 Before (%)',
-      'spo2_after': 'SpO2 After (%)',
       'fr': 'FR (br/min)',
       'temperature': 'Temp (C)',
       'glucose': 'Glucose (mg/dl)',
+      'spo2': 'SpO2 (%)',
+      'spo2_before': 'SpO2 Before (%)',
+      'spo2_after': 'SpO2 After (%)',
     };
     return labels[key] ?? key;
   }
 
   static String _formatNeedLabel(String key) {
     const labels = {
-      'oxygen': 'Oxygène',
-      'oxygene': 'Oxygène',
-      'perfusion': 'perfusion',
+      'oxygen': 'Oxygene',
+      'oxygene': 'Oxygene',
+      'perfusion': 'Perfusion',
       'monitorage': 'Monitorage',
       'pensement': 'Pansement',
       'immobilisation': 'Immobilisation',
       'vni': 'VNI',
+      'vc': 'VC',
       'pep': 'PEP',
       'aide': 'Aide',
-      'fr': 'FR',
-      'vcc': 'VCC',
-      'vc': 'VC',
-      'v.cabot': 'courant',
+      'vcc': 'fie2+vc',
+      'v.cabot': 'Courant',
       'fc': 'F.C',
       'pas/pad': 'PAS/PAD',
       'sao2': 'SaO2',
-      'destro': 'dextro',
+      'destro': 'Dextro',
       'pse': 'PSE',
-      'norade': 'Noradé',
-      'noradrenaline': 'Noradré',
-      'adre': 'Adré',
-      'adrenalina': 'Adré',
-      'sedation': 'Sédation',
-      'heparine': 'Héparine',
+      'norade': 'Norade',
+      'noradrenaline': 'Noradre',
+      'adre': 'Adre',
+      'adrenalina': 'Adre',
+      'sedation': 'Sedation',
+      'heparine': 'Heparine',
       'rivotril': 'Rivotril',
       'bb': 'Bigbag',
     };
-    // Try lowercase key first, then return original if not found
     return labels[key.toLowerCase()] ?? key;
   }
 
@@ -1140,17 +1385,21 @@ class PdfService {
 
   static String _formatMedicalHistoryLabel(String key) {
     const labels = {
-      'diabetic': 'Diabétique',
-      'hta': 'Hypertension',
+      'diabetic': 'Diabetique',
+      'hta': 'HTA',
       'douleur_thorasique': 'Douleur Thoracique',
       'dialysis': 'Dialyse',
-      'distresse_respiratoire': 'Détresse Respiratoire',
+      'distresse_respiratoire': 'Detresse Respiratoire',
+      'hypotension': 'Hypotension',
       'hypalepsie': 'Hypotension',
       'coronaria': 'Maladie Coronarienne',
+      'cardiaque': 'Cardiaque',
+      'bpco': 'BPCO',
+      'asthme': 'Asthme',
+      'epilepsie': 'Epilepsie',
     };
-    return labels[key] ?? key;
+    return labels[key.toLowerCase()] ?? key;
   }
-
   /// Generate and download invoice (facture) PDF for a mission
   static Future<void> generateInvoicePdf(Mission mission) async {
     try {
@@ -1219,11 +1468,11 @@ class PdfService {
                       style: const pw.TextStyle(fontSize: 8),
                     ),
                     pw.Text(
-                      'Avenue Mohamed El Jamoussi Im. Lina 7ème étage App. N° 72 - 3000 SFAX',
+                      'Avenue Mohamed El Jamoussi Im. Lina 7Ã¨me Ã©tage App. NÂ° 72 - 3000 SFAX',
                       style: const pw.TextStyle(fontSize: 8),
                     ),
                     pw.Text(
-                      'Tél: 56 250 250 - 93 903 333  **  E-mail: samibedoui@gmail.com',
+                      'TÃ©l: 56 250 250 - 93 903 333  **  E-mail: samibedoui@gmail.com',
                       style: const pw.TextStyle(fontSize: 8),
                     ),
                     pw.Text(
@@ -1315,7 +1564,7 @@ class PdfService {
                     child: pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text('LIEU DE DÉPART',
+                        pw.Text('LIEU DE DÃ‰PART',
                             style: pw.TextStyle(
                                 fontSize: 9, fontWeight: pw.FontWeight.bold)),
                         pw.Container(
@@ -1392,7 +1641,7 @@ class PdfService {
                     children: [
                       pw.Padding(
                         padding: const pw.EdgeInsets.all(5),
-                        child: pw.Text('Service de Transport Médical',
+                        child: pw.Text('Service de Transport MÃ©dical',
                             style: const pw.TextStyle(fontSize: 9)),
                       ),
                       pw.Padding(
@@ -1481,3 +1730,7 @@ class PdfService {
     }
   }
 }
+
+
+
+

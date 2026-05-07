@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user_model.dart';
 import '../models/ambulance_model.dart';
@@ -287,6 +287,14 @@ class _ManagerAmbulancesScreenContentState
     });
   }
 
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.user.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.user.id}';
+  }
+
   Future<void> _loadEquipmentMetadata() async {
     await Future.wait([_loadEquipmentTypes(), _loadEquipmentCompanyStaff()]);
   }
@@ -294,7 +302,7 @@ class _ManagerAmbulancesScreenContentState
   Future<void> _loadEquipmentTypes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+      final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
       if (!mounted) return;
       setState(() {
         _equipmentTypes = [
@@ -388,6 +396,25 @@ class _ManagerAmbulancesScreenContentState
       print('Error calculating balance: $e');
       return 0.0;
     }
+  }
+
+  Map<String, double> _buildFuelCardRemainingById(List<FuelCard> fuelCards) {
+    final chronologicalCards = List<FuelCard>.from(fuelCards)
+      ..sort((a, b) => a.date.compareTo(b.date));
+
+    double runningBalance = 0.0;
+    final remainingById = <String, double>{};
+
+    for (final card in chronologicalCards) {
+      if (card.driverName.toLowerCase() == 'refill') {
+        runningBalance += card.soldesPaid;
+      } else {
+        runningBalance -= card.soldesPaid;
+      }
+      remainingById[card.id] = runningBalance;
+    }
+
+    return remainingById;
   }
 
   Future<List<MaintenanceRecord>> _getMaintenanceRecords(
@@ -943,7 +970,7 @@ class _ManagerAmbulancesScreenContentState
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Unit Details: ${ambulance.ambulanceNumber}',
+                    'Détails de l\'ambulance: ${ambulance.ambulanceNumber}',
                     style: const TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -952,7 +979,7 @@ class _ManagerAmbulancesScreenContentState
                   ElevatedButton.icon(
                     onPressed: () => _exportAmbulanceReport(ambulance),
                     icon: const Icon(Icons.download, size: 16),
-                    label: const Text('Export PDF'),
+                    label: const Text('Exporter PDF'),
                     style: ElevatedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 12,
@@ -1031,7 +1058,7 @@ class _ManagerAmbulancesScreenContentState
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'MAINTENANCE HISTORY',
+                    'HISTORIQUE DE MAINTENANCE',
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
@@ -1573,10 +1600,12 @@ class _ManagerAmbulancesScreenContentState
               // Sort cards by date in descending order (newest first)
               final sortedCards = List<FuelCard>.from(fuelCards)
                 ..sort((a, b) => b.date.compareTo(a.date));
+              final remainingById = _buildFuelCardRemainingById(fuelCards);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: sortedCards.map((card) {
+                  final computedRemaining = remainingById[card.id] ?? 0.0;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Container(
@@ -1594,7 +1623,7 @@ class _ManagerAmbulancesScreenContentState
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Conducteur: ${card.driverName}',
+                                  'Chauffeur: ${card.driverName}',
                                   style: const TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
@@ -1608,7 +1637,7 @@ class _ManagerAmbulancesScreenContentState
                                   ),
                                 ),
                                 Text(
-                                  'Soldes Restant: ${card.soldesRestant} TND',
+                                  'Soldes Restant: ${computedRemaining.toStringAsFixed(1)} TND',
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.grey[600],

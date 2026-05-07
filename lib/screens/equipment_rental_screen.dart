@@ -11,6 +11,42 @@ import '../config/constants.dart';
 // Base equipment types (fixed options)
 const List<String> baseEquipmentTypes = ['Oxygéne', 'Autre'];
 
+String _normalizeEquipmentTypeLabel(String value) => value.trim().toLowerCase();
+
+bool _isOxygenEquipmentTypeLabel(String value) =>
+    _normalizeEquipmentTypeLabel(value).contains('oxy');
+
+bool _isPlaceholderEquipmentTypeLabel(String value) {
+  final normalized = _normalizeEquipmentTypeLabel(value);
+  return normalized == 'autre' || normalized == 'other';
+}
+
+String _canonicalEquipmentTypeLabel(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return '';
+  if (_isOxygenEquipmentTypeLabel(trimmed)) return 'Oxygene';
+  return trimmed;
+}
+
+List<String> _buildEquipmentTypeOptions({
+  required List<String> stockTypes,
+  required List<String> fallbackTypes,
+}) {
+  final sourceTypes = stockTypes.isNotEmpty ? stockTypes : fallbackTypes;
+  final options =
+      sourceTypes
+          .map(_canonicalEquipmentTypeLabel)
+          .where(
+            (type) =>
+                type.isNotEmpty && !_isPlaceholderEquipmentTypeLabel(type),
+          )
+          .toSet()
+          .toList()
+        ..sort();
+
+  return [...options, 'Autre'];
+}
+
 class EquipmentRentalScreen extends StatefulWidget {
   final Ambulance ambulance;
   final User user;
@@ -32,6 +68,14 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
   bool _isLoading = true;
   List<String> _allEquipmentTypes = [...baseEquipmentTypes];
   List<User> _companyStaff = [];
+
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.user.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.user.id}';
+  }
 
   @override
   void initState() {
@@ -68,7 +112,7 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
   Future<void> _loadCustomEquipmentTypes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+      final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
       if (mounted) {
         setState(() {
           _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
@@ -992,12 +1036,21 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
   String _notes = '';
   bool _isLoading = false;
   int _quantity = 1; // Quantity of items being rented
+  List<String> _stockEquipmentTypes = [];
 
   late TextEditingController _rentDateController;
   late TextEditingController _returnDateController;
   late TextEditingController _quantityController;
   late TextEditingController _ambulancierController;
   final Set<String> _selectedTeammateIds = {};
+
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.currentUser.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.currentUser.id}';
+  }
 
   @override
   void initState() {
@@ -1014,6 +1067,19 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
     _returnDateController = TextEditingController(text: _returnDate);
     _quantityController = TextEditingController(text: _quantity.toString());
     _ambulancierController = TextEditingController(text: _ambulancierName);
+    _loadStockEquipmentTypes();
+  }
+
+  Future<void> _loadStockEquipmentTypes() async {
+    try {
+      final inventories = await widget.rentalService.getEquipmentInventories();
+      if (!mounted) return;
+      setState(() {
+        _stockEquipmentTypes = inventories.keys.toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading stock equipment types: $e');
+    }
   }
 
   void _updateAmbulancierName() {
@@ -1042,12 +1108,12 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
       // Only save if it's a custom type (not in baseEquipmentTypes)
       if (!baseEquipmentTypes.contains(equipmentType)) {
         final prefs = await SharedPreferences.getInstance();
-        final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+        final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
 
         // Only add if not already in the list
         if (!customTypes.contains(equipmentType)) {
           customTypes.add(equipmentType);
-          await prefs.setStringList('custom_equipment_types', customTypes);
+          await prefs.setStringList(_equipmentTypesPrefsKey, customTypes);
           debugPrint('✅ Saved custom equipment type: $equipmentType');
         }
       }
@@ -1105,6 +1171,11 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final equipmentTypeOptions = _buildEquipmentTypeOptions(
+      stockTypes: _stockEquipmentTypes,
+      fallbackTypes: widget.equipmentTypes,
+    );
+
     return AlertDialog(
       title: const Text('Ajouter Équipement en Location'),
       content: SingleChildScrollView(
@@ -1122,7 +1193,7 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                items: widget.equipmentTypes
+                items: equipmentTypeOptions
                     .map(
                       (item) =>
                           DropdownMenuItem(value: item, child: Text(item)),
@@ -1442,11 +1513,20 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
   String _notes = '';
   bool _isLoading = false;
   int _quantity = 1;
+  List<String> _stockEquipmentTypes = [];
 
   late TextEditingController _saleDateController;
   late TextEditingController _quantityController;
   late TextEditingController _ambulancierController;
   final Set<String> _selectedTeammateIds = {};
+
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.currentUser.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.currentUser.id}';
+  }
 
   @override
   void initState() {
@@ -1455,6 +1535,19 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
     _saleDateController = TextEditingController(text: _saleDate);
     _quantityController = TextEditingController(text: _quantity.toString());
     _ambulancierController = TextEditingController(text: _ambulancierName);
+    _loadStockEquipmentTypes();
+  }
+
+  Future<void> _loadStockEquipmentTypes() async {
+    try {
+      final inventories = await widget.rentalService.getEquipmentInventories();
+      if (!mounted) return;
+      setState(() {
+        _stockEquipmentTypes = inventories.keys.toList();
+      });
+    } catch (e) {
+      debugPrint('Error loading stock equipment types: $e');
+    }
   }
 
   void _updateAmbulancierName() {
@@ -1481,11 +1574,11 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
     try {
       if (!baseEquipmentTypes.contains(equipmentType)) {
         final prefs = await SharedPreferences.getInstance();
-        final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+        final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
 
         if (!customTypes.contains(equipmentType)) {
           customTypes.add(equipmentType);
-          await prefs.setStringList('custom_equipment_types', customTypes);
+          await prefs.setStringList(_equipmentTypesPrefsKey, customTypes);
           debugPrint('✅ Saved custom equipment type: $equipmentType');
         }
       }
@@ -1523,18 +1616,6 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
           quantity: _quantity,
         );
 
-        if (equipmentType.toLowerCase().contains('oxy')) {
-          final totalOxygen = await widget.rentalService
-              .getOxygenInventoryCount();
-          final newTotal = (totalOxygen - _quantity)
-              .clamp(0, totalOxygen)
-              .toInt();
-          await widget.rentalService.setOxygenInventoryCount(newTotal);
-          debugPrint(
-            'Oxygen inventory updated: $totalOxygen -> $newTotal (sold $_quantity)',
-          );
-        }
-
         if (mounted) {
           widget.onEquipmentSold(sale);
         }
@@ -1554,6 +1635,11 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final equipmentTypeOptions = _buildEquipmentTypeOptions(
+      stockTypes: _stockEquipmentTypes,
+      fallbackTypes: widget.equipmentTypes,
+    );
+
     return AlertDialog(
       title: const Text('Vendre Équipement'),
       content: SingleChildScrollView(
@@ -1571,7 +1657,7 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                items: widget.equipmentTypes
+                items: equipmentTypeOptions
                     .map(
                       (item) =>
                           DropdownMenuItem(value: item, child: Text(item)),

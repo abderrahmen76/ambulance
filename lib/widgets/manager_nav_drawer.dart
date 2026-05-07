@@ -115,13 +115,13 @@ class ManagerNavDrawer extends StatelessWidget {
                   _buildNavItem(
                     context: context,
                     icon: Icons.badge,
-                    label: 'Shifts',
+                    label: 'Gardes',
                     index: 5,
                   ),
                   _buildNavItem(
                     context: context,
                     icon: Icons.map,
-                    label: 'Suivi Temps Réel',
+                    label: 'Suivi en temps réel',
                     index: 6,
                   ),
                   _buildNavItem(
@@ -136,9 +136,7 @@ class ManagerNavDrawer extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                border: Border(
-                  top: BorderSide(color: Colors.grey.shade200),
-                ),
+                border: Border(top: BorderSide(color: Colors.grey.shade200)),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -247,8 +245,9 @@ class ManagerNavDrawer extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       child: Material(
-        color:
-            isSelected ? AppColors.primary.withOpacity(0.1) : Colors.transparent,
+        color: isSelected
+            ? AppColors.primary.withOpacity(0.1)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(8),
         child: InkWell(
           borderRadius: BorderRadius.circular(8),
@@ -271,8 +270,9 @@ class ManagerNavDrawer extends StatelessWidget {
                     label,
                     style: TextStyle(
                       fontSize: 15,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.w500,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.w500,
                       color: isSelected
                           ? AppColors.primary
                           : Colors.grey.shade700,

@@ -321,13 +321,13 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         ? null
         : DateTime.now().add(Duration(minutes: minutes));
     if (nextStart == null) {
-      return '${schedule.shiftLabel} starts at ${schedule.startTime}';
+      return '${schedule.shiftLabel} commence à ${schedule.startTime}';
     }
     final formattedDate =
         '${nextStart.day.toString().padLeft(2, '0')}/${nextStart.month.toString().padLeft(2, '0')}';
     final formattedTime =
         '${nextStart.hour.toString().padLeft(2, '0')}:${nextStart.minute.toString().padLeft(2, '0')}';
-    return '${schedule.shiftLabel} starts on $formattedDate at $formattedTime';
+    return '${schedule.shiftLabel} commence le $formattedDate à $formattedTime';
   }
 
   void _syncTrackingState() {
@@ -430,19 +430,19 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             ambulanceNumber: _selectedAmbulanceNumber!,
           );
           _showSnack(
-            'Shift started. ${_selectedAmbulanceNumber!} claimed automatically.',
+            'Service démarré. ${_selectedAmbulanceNumber!} attribuée automatiquement.',
             Colors.green,
           );
         } else if (result.conflictingClaim != null) {
           _showSnack(
-            'Shift started. ${_selectedAmbulanceNumber!} is already tracked by ${result.conflictingClaim!.driverName}.',
+            'Service démarré. ${_selectedAmbulanceNumber!} est déjà suivie par ${result.conflictingClaim!.driverName}.',
             Colors.orange,
           );
         } else {
-          _showSnack('Shift started.', Colors.green);
+          _showSnack('Service démarré.', Colors.green);
         }
       } else {
-        _showSnack('Shift started.', Colors.green);
+        _showSnack('Service démarré.', Colors.green);
       }
     } catch (error) {
       _showSnack(_friendlyTrackingError(error), Colors.red);
@@ -462,7 +462,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         await BackgroundLocationService.stopBackgroundService();
       }
       _syncTrackingState();
-      _showSnack('Shift ended and tracking released.', Colors.orange);
+      _showSnack('Service terminé et suivi libéré.', Colors.orange);
     } catch (error) {
       _showSnack(
         'Impossible de terminer votre service pour le moment. Réessayez dans quelques instants.',
@@ -486,7 +486,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         ambulanceId.isEmpty ||
         ambulanceNumber == null ||
         ambulanceNumber.isEmpty) {
-      _showSnack('Please select an ambulance first.', Colors.red);
+      _showSnack('Veuillez d’abord sélectionner une ambulance.', Colors.red);
       return;
     }
 
@@ -518,9 +518,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         ambulanceId: ambulanceId,
         ambulanceNumber: ambulanceNumber,
       );
-      _showSnack('Tracking claimed for $ambulanceNumber.', Colors.green);
+      _showSnack('Suivi attribué à $ambulanceNumber.', Colors.green);
     } catch (error) {
-      _showSnack('Unable to claim ambulance: $error', Colors.red);
+      _showSnack('Impossible d’attribuer l’ambulance : $error', Colors.red);
     } finally {
       if (mounted) {
         setState(() => _isBusy = false);
@@ -537,9 +537,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         await BackgroundLocationService.stopBackgroundService();
       }
       _syncTrackingState();
-      _showSnack('Ambulance released.', Colors.orange);
+      _showSnack('Ambulance libérée.', Colors.orange);
     } catch (error) {
-      _showSnack('Unable to release ambulance: $error', Colors.red);
+      _showSnack('Impossible de libérer l’ambulance : $error', Colors.red);
     } finally {
       if (mounted) {
         setState(() => _isBusy = false);
@@ -550,7 +550,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
   Future<void> _toggleBackgroundService() async {
     if (_presenceService.activeClaim == null) {
       _showSnack(
-        'Claim an ambulance first. Background tracking follows the active claim.',
+        'Attribuez d’abord une ambulance. Le suivi en arrière-plan suit l’attribution active.',
         Colors.orange,
       );
       return;
@@ -561,7 +561,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
       if (mounted) {
         setState(() => _backgroundServiceActive = false);
       }
-      _showSnack('Background tracking disabled.', Colors.orange);
+      _showSnack('Suivi en arrière-plan désactivé.', Colors.orange);
       return;
     }
 
@@ -583,26 +583,26 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
     if (mounted) {
       setState(() => _backgroundServiceActive = true);
     }
-    _showSnack('Background tracking enabled.', Colors.green);
+    _showSnack('Suivi en arrière-plan activé.', Colors.green);
   }
 
   Future<bool?> _showTakeoverDialog(TrackingClaim claim) {
     return showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Take over tracking?'),
+        title: const Text('Reprendre le suivi ?'),
         content: Text(
-          '${claim.ambulanceNumber} is currently held by ${claim.driverName}.\n'
-          'Last heartbeat: ${claim.lastHeartbeatAt.toLocal()}',
+          '${claim.ambulanceNumber} est actuellement attribuée à ${claim.driverName}.\n'
+          'Dernier signal : ${claim.lastHeartbeatAt.toLocal()}',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child: const Text('Annuler'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Take over'),
+            child: const Text('Reprendre'),
           ),
         ],
       ),
@@ -633,7 +633,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Shift & Tracking',
+            'Service et suivi',
             style: Theme.of(
               context,
             ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
@@ -674,14 +674,14 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             children: [
               Expanded(
                 child: _buildStatusChip(
-                  label: activeShift != null ? 'SHIFT ACTIVE' : 'OFF SHIFT',
+                  label: activeShift != null ? 'SERVICE ACTIF' : 'HORS SERVICE',
                   color: activeShift != null ? Colors.green : Colors.grey,
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: _buildStatusChip(
-                  label: _isConnected ? 'LIVE LINK' : 'DISCONNECTED',
+                  label: _isConnected ? 'LIAISON ACTIVE' : 'DÉCONNECTÉ',
                   color: _isConnected ? Colors.blue : Colors.orange,
                 ),
               ),
@@ -690,8 +690,8 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
           const SizedBox(height: 14),
           Text(
             activeClaim != null
-                ? 'Primary tracker: ${activeClaim.ambulanceNumber}'
-                : 'No ambulance claimed yet',
+                ? 'Ambulance suivie : ${activeClaim.ambulanceNumber}'
+                : 'Aucune ambulance attribuée pour le moment',
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -699,8 +699,8 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
           const SizedBox(height: 6),
           Text(
             shiftStarted != null
-                ? 'Shift started ${shiftStarted.toString().split('.').first}'
-                : 'Manager schedules can start this shift automatically when the planned time begins.',
+                ? 'Service démarré le ${shiftStarted.toString().split('.').first}'
+                : 'Le planning manager peut démarrer ce service automatiquement à l’heure prévue.',
             style: TextStyle(color: Colors.grey.shade700),
           ),
           if (activeShift == null &&
@@ -708,7 +708,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
               _nextSchedule != null) ...[
             const SizedBox(height: 8),
             Text(
-              'Next schedule: ${_nextScheduleLabel()!}',
+              'Prochain service : ${_nextScheduleLabel()!}',
               style: TextStyle(
                 color: Colors.orange.shade800,
                 fontSize: 12,
@@ -730,7 +730,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Active schedule: ${_activeSchedule!.shiftLabel} (${_activeSchedule!.timeRangeLabel})',
+                      'Planning actif : ${_activeSchedule!.shiftLabel} (${_activeSchedule!.timeRangeLabel})',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -739,14 +739,14 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              'Tracking is managed automatically while this schedule is active.',
+              'Le suivi est géré automatiquement pendant ce service planifié.',
               style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
             ),
           ],
           if (lastBeat != null) ...[
             const SizedBox(height: 6),
             Text(
-              'Last heartbeat: ${lastBeat.toString().split('.').first}',
+              'Dernier signal : ${lastBeat.toString().split('.').first}',
               style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
             ),
           ],
@@ -763,12 +763,15 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                             final nextLabel = _nextScheduleLabel();
                             _showSnack(
                               nextLabel == null
-                                  ? 'No active shift right now.'
-                                  : 'No active shift right now. $nextLabel.',
+                                  ? 'Aucun service actif maintenant.'
+                                  : 'Aucun service actif maintenant. $nextLabel.',
                               Colors.orange,
                             );
                           } else {
-                            _showSnack('Scheduled shift synced.', Colors.green);
+                            _showSnack(
+                              'Service planifié synchronisé.',
+                              Colors.green,
+                            );
                           }
                         }
                       : (activeShift == null ? _startShift : null),
@@ -778,9 +781,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                         : Icons.play_circle_fill,
                   ),
                   label: Text(
-                    _driverSchedules.isNotEmpty
-                        ? 'Sync Schedule'
-                        : 'Start Shift',
+                    _driverSchedules.isNotEmpty ? 'Synchroniser' : 'Démarrer',
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
@@ -796,7 +797,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                       ? null
                       : (activeShift != null ? _endShift : null),
                   icon: const Icon(Icons.stop_circle_outlined),
-                  label: Text(_isScheduleLocked ? 'Scheduled' : 'End Shift'),
+                  label: Text(_isScheduleLocked ? 'Planifié' : 'Terminer'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
@@ -1006,7 +1007,12 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
               color: color,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(Icons.access_time, color: Colors.white),
+            child: Icon(
+              schedule.isWorkingShift
+                  ? Icons.access_time
+                  : Icons.event_busy_outlined,
+              color: Colors.white,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1014,7 +1020,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  schedule.shiftLabel,
+                  schedule.displayLabel,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1024,7 +1030,7 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  schedule.timeRangeLabel,
+                  schedule.displayTimeRangeLabel,
                   style: TextStyle(
                     color: Colors.grey.shade700,
                     fontWeight: FontWeight.w600,
@@ -1118,6 +1124,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
   }
 
   String _recurrenceLabel(DriverShiftSchedule schedule) {
+    if (!schedule.isWorkingShift) {
+      return schedule.scheduleTypeLabel;
+    }
     if (schedule.recurrenceType == ShiftRecurrence.weekly) {
       return 'Hebdo';
     }
@@ -1125,6 +1134,16 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
   }
 
   Color _scheduleColor(DriverShiftSchedule schedule) {
+    switch (schedule.scheduleType) {
+      case DriverShiftSchedule.typeRest:
+        return const Color(0xFF64748B);
+      case DriverShiftSchedule.typeWeekend:
+        return const Color(0xFF2563EB);
+      case DriverShiftSchedule.typeLeave:
+        return const Color(0xFF16A34A);
+      case DriverShiftSchedule.typeSickLeave:
+        return const Color(0xFFDC2626);
+    }
     final label = schedule.shiftLabel.toLowerCase();
     if (label.contains('night') || label.contains('nuit')) {
       return const Color(0xFF41295A);
@@ -1152,14 +1171,14 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Latest published location',
+            'Dernière position publiée',
             style: TextStyle(fontWeight: FontWeight.w700, color: Colors.blue),
           ),
           const SizedBox(height: 8),
           Text(displayLocation),
           const SizedBox(height: 6),
           Text(
-            'Accuracy ${position.accuracy.toStringAsFixed(1)} m',
+            'Précision ${position.accuracy.toStringAsFixed(1)} m',
             style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
           ),
         ],

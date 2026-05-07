@@ -31,8 +31,18 @@ class _ManagerEquipmentRentalsScreenState
   bool _isLoading = true;
   List<String> _allEquipmentTypes = [...baseEquipmentTypes];
   String _filterStatus = 'all'; // all, active, returned
+  String _statsEquipmentType = 'all';
+  Map<String, int> _inventoryByEquipmentType = {};
   int _totalOxygenBottles = 0; // Total oxygen bottles in inventory
   Map<String, String> _ambulanceNamesById = {};
+
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.user.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.user.id}';
+  }
 
   @override
   void initState() {
@@ -44,7 +54,7 @@ class _ManagerEquipmentRentalsScreenState
   Future<void> _loadData() async {
     await _loadCustomEquipmentTypes();
     await _getTenantAmbulances();
-    await _loadOxygenBottlesInventory();
+    await _loadEquipmentInventories();
     await _loadAllRentals();
   }
 
@@ -216,7 +226,7 @@ class _ManagerEquipmentRentalsScreenState
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Définir Inventaire Oxygène'),
+        title: const Text('Définir Inventaire Oxygene'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -257,7 +267,7 @@ class _ManagerEquipmentRentalsScreenState
   Future<void> _loadCustomEquipmentTypes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+      final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
       if (mounted) {
         setState(() {
           _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
@@ -265,6 +275,43 @@ class _ManagerEquipmentRentalsScreenState
       }
     } catch (e) {
       debugPrint('Error loading custom equipment types: $e');
+    }
+  }
+
+  Future<void> _persistCustomEquipmentTypes(List<String> equipmentTypes) async {
+    final prefs = await SharedPreferences.getInstance();
+    final customTypes =
+        equipmentTypes
+            .map((type) => _canonicalEquipmentType(type))
+            .where(
+              (type) =>
+                  !baseEquipmentTypes.contains(type) &&
+                  !_isPlaceholderEquipmentType(type),
+            )
+            .toSet()
+            .toList()
+          ..sort();
+    await prefs.setStringList(_equipmentTypesPrefsKey, customTypes);
+  }
+
+  Future<void> _loadEquipmentInventories() async {
+    try {
+      final inventories = await _rentalService.getEquipmentInventories();
+      if (mounted) {
+        setState(() {
+          _inventoryByEquipmentType = inventories;
+          _totalOxygenBottles =
+              inventories['Oxygene'] ?? inventories['Oxygene'] ?? 0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading equipment inventories: $e');
+      if (mounted) {
+        setState(() {
+          _inventoryByEquipmentType = {};
+          _totalOxygenBottles = 0;
+        });
+      }
     }
   }
 
@@ -308,6 +355,104 @@ class _ManagerEquipmentRentalsScreenState
       default:
         return _allRentals;
     }
+  }
+
+  String _normalizeEquipmentType(String value) => value.trim().toLowerCase();
+
+  bool _isInventoryEquipmentType(String value) =>
+      _normalizeEquipmentType(value).contains('invent');
+
+  bool _isPlaceholderEquipmentType(String value) {
+    final normalized = _normalizeEquipmentType(value);
+    return normalized == 'autre' || normalized == 'other';
+  }
+
+  bool _isOxygenEquipmentType(String value) =>
+      _normalizeEquipmentType(value).contains('oxy');
+
+  String _canonicalEquipmentType(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return 'Equipement';
+    if (_isOxygenEquipmentType(trimmed)) return 'Oxygene';
+    return trimmed;
+  }
+
+  String _selectedInventoryTypeLabel() =>
+      _statsEquipmentType == 'all' ? 'Stock' : _statsEquipmentType;
+
+  int _selectedInventoryQuantity() {
+    if (_statsEquipmentType == 'all') {
+      return _inventoryByEquipmentType.values.fold<int>(
+        0,
+        (sum, qty) => sum + qty,
+      );
+    }
+
+    if (_isOxygenEquipmentType(_statsEquipmentType)) {
+      return _inventoryByEquipmentType['Oxygene'] ?? 0;
+    }
+
+    return _inventoryByEquipmentType[_statsEquipmentType] ?? 0;
+  }
+
+  List<String> _getStatsEquipmentTypes() {
+    final uniqueTypes = <String>{};
+
+    for (final type in _allEquipmentTypes) {
+      final trimmed = type.trim();
+      if (trimmed.isEmpty ||
+          _isInventoryEquipmentType(trimmed) ||
+          _isPlaceholderEquipmentType(trimmed)) {
+        continue;
+      }
+      if (_isOxygenEquipmentType(trimmed)) {
+        uniqueTypes.add('Oxygene');
+      } else {
+        uniqueTypes.add(trimmed);
+      }
+    }
+
+    for (final rental in _allRentals) {
+      final trimmed = rental.equipmentType.trim();
+      if (trimmed.isEmpty ||
+          _isInventoryEquipmentType(trimmed) ||
+          _isPlaceholderEquipmentType(trimmed)) {
+        continue;
+      }
+      if (_isOxygenEquipmentType(trimmed)) {
+        uniqueTypes.add('Oxygene');
+      } else {
+        uniqueTypes.add(trimmed);
+      }
+    }
+
+    final sortedTypes = uniqueTypes.toList()..sort();
+    return ['all', ...sortedTypes];
+  }
+
+  List<EquipmentRental> _getStatsRentals() {
+    final rentalsOnly = _allRentals
+        .where((r) => r.metadata == null || r.metadata!.isEmpty)
+        .toList();
+
+    if (_statsEquipmentType == 'all') {
+      return rentalsOnly;
+    }
+
+    if (_isOxygenEquipmentType(_statsEquipmentType)) {
+      return rentalsOnly
+          .where((r) => _isOxygenEquipmentType(r.equipmentType))
+          .toList();
+    }
+
+    final selectedType = _normalizeEquipmentType(_statsEquipmentType);
+    return rentalsOnly
+        .where((r) => _normalizeEquipmentType(r.equipmentType) == selectedType)
+        .toList();
+  }
+
+  void _showDynamicInventoryDialog() {
+    _showSetInventoryDialog();
   }
 
   void _showEditRentalDialog(EquipmentRental rental) {
@@ -604,10 +749,10 @@ class _ManagerEquipmentRentalsScreenState
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _showSetInventoryDialog,
+              onPressed: _showDynamicInventoryDialog,
               icon: const Icon(Icons.inventory_2),
               label: Text(
-                'Inventaire Oxygène: $_totalOxygenBottles bouteilles',
+                'Inventaire: ${_inventoryByEquipmentType.length} types',
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orange,
@@ -736,7 +881,7 @@ class _ManagerEquipmentRentalsScreenState
           const SizedBox(height: 20),
 
           // Performance Section
-          _buildPerformancePanel(),
+          _buildDynamicPerformancePanel(),
           const SizedBox(height: 20),
 
           // Rentals list or empty state
@@ -1140,10 +1285,8 @@ class _ManagerEquipmentRentalsScreenState
   }
 
   Widget _buildPerformancePanel() {
-    // Exclude inventory records (metadata field is not null)
-    final rentalsOnly = _allRentals
-        .where((r) => r.metadata == null || r.metadata!.isEmpty)
-        .toList();
+    final rentalsOnly = _getStatsRentals();
+    final equipmentTypeOptions = _getStatsEquipmentTypes();
 
     final totalCost = rentalsOnly.fold<double>(0, (sum, r) => sum + r.cost);
     final soldItems = rentalsOnly.where((r) => _isSale(r)).toList();
@@ -1157,6 +1300,10 @@ class _ManagerEquipmentRentalsScreenState
     final returnedCount = rentedItems
         .where((r) => r.isReturned == true)
         .fold<int>(0, (sum, r) => sum + r.quantity);
+    final totalQuantity = rentalsOnly.fold<int>(
+      0,
+      (sum, r) => sum + r.quantity,
+    );
 
     double averageCostFor(List<EquipmentRental> items) {
       final totalQuantity = items.fold<int>(0, (sum, r) => sum + r.quantity);
@@ -1166,19 +1313,12 @@ class _ManagerEquipmentRentalsScreenState
 
     final rentedAverageCost = averageCostFor(rentedItems);
     final soldAverageCost = averageCostFor(soldItems);
-
-    // Calculate oxygen bottles rented and remaining
-    final oxygenRented = rentalsOnly
-        .where(
-          (r) =>
-              (r.equipmentType.toLowerCase().contains('oxy')) &&
-              r.transactionType == 'rental' &&
-              r.isReturned == false,
-        )
-        .fold<int>(0, (sum, r) => sum + r.quantity);
-    final oxygenRemaining = (_totalOxygenBottles - oxygenRented)
-        .clamp(0, _totalOxygenBottles)
-        .toInt();
+    final selectedInventoryQuantity = _selectedInventoryQuantity();
+    final selectedRentedQuantity = activeCount;
+    final selectedRemainingQuantity =
+        (selectedInventoryQuantity - selectedRentedQuantity) < 0
+        ? 0
+        : (selectedInventoryQuantity - selectedRentedQuantity);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1205,6 +1345,36 @@ class _ManagerEquipmentRentalsScreenState
               color: Colors.grey[700],
               letterSpacing: 0.5,
             ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: equipmentTypeOptions.contains(_statsEquipmentType)
+                ? _statsEquipmentType
+                : 'all',
+            decoration: InputDecoration(
+              labelText: 'Type d\'équipement',
+              filled: true,
+              fillColor: Colors.grey[50],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+            items: equipmentTypeOptions
+                .map(
+                  (type) => DropdownMenuItem<String>(
+                    value: type,
+                    child: Text(type == 'all' ? 'Tous les équipements' : type),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _statsEquipmentType = value);
+            },
           ),
           const SizedBox(height: 16),
           GridView.count(
@@ -1240,16 +1410,160 @@ class _ManagerEquipmentRentalsScreenState
                 Icons.sell,
               ),
               _buildPerformanceStat(
-                'Oxygène Loué',
-                oxygenRented.toString(),
+                '${_selectedInventoryTypeLabel()} Loué',
+                selectedRentedQuantity.toString(),
                 Colors.red,
                 Icons.local_fire_department,
               ),
               _buildPerformanceStat(
-                'Oxygène Restant',
-                oxygenRemaining.toString(),
-                oxygenRemaining > 0 ? Colors.green : Colors.red,
+                '${_selectedInventoryTypeLabel()} Restant',
+                selectedRemainingQuantity.toString(),
+                selectedRemainingQuantity > 0 ? Colors.green : Colors.red,
                 Icons.science,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDynamicPerformancePanel() {
+    final rentalsOnly = _getStatsRentals();
+    final equipmentTypeOptions = _getStatsEquipmentTypes();
+
+    final totalCost = rentalsOnly.fold<double>(0, (sum, r) => sum + r.cost);
+    final soldItems = rentalsOnly.where((r) => _isSale(r)).toList();
+    final rentedItems = rentalsOnly
+        .where((r) => !_isSale(r) && r.transactionType == 'rental')
+        .toList();
+    final soldCount = soldItems.fold<int>(0, (sum, r) => sum + r.quantity);
+    final activeCount = rentedItems
+        .where((r) => r.isReturned == false)
+        .fold<int>(0, (sum, r) => sum + r.quantity);
+    final returnedCount = rentedItems
+        .where((r) => r.isReturned == true)
+        .fold<int>(0, (sum, r) => sum + r.quantity);
+    final totalQuantity = rentalsOnly.fold<int>(
+      0,
+      (sum, r) => sum + r.quantity,
+    );
+
+    double averageCostFor(List<EquipmentRental> items) {
+      final quantity = items.fold<int>(0, (sum, r) => sum + r.quantity);
+      final amount = items.fold<double>(0, (sum, r) => sum + r.cost);
+      return quantity > 0 ? amount / quantity : 0.0;
+    }
+
+    final rentedAverageCost = averageCostFor(rentedItems);
+    final soldAverageCost = averageCostFor(soldItems);
+    final selectedInventoryQuantity = _selectedInventoryQuantity();
+    final selectedRentedQuantity = activeCount;
+    final selectedRemainingQuantity =
+        (selectedInventoryQuantity - selectedRentedQuantity) < 0
+        ? 0
+        : (selectedInventoryQuantity - selectedRentedQuantity);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey[200]!),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'PERFORMANCE',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[700],
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: equipmentTypeOptions.contains(_statsEquipmentType)
+                ? _statsEquipmentType
+                : 'all',
+            decoration: InputDecoration(
+              labelText: 'Type d\'équipement',
+              filled: true,
+              fillColor: Colors.grey[50],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+            items: equipmentTypeOptions
+                .map(
+                  (type) => DropdownMenuItem<String>(
+                    value: type,
+                    child: Text(type == 'all' ? 'Tous les équipements' : type),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _statsEquipmentType = value);
+            },
+          ),
+          const SizedBox(height: 16),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 1.2,
+            children: [
+              _buildPerformanceStat(
+                'Revenu Total',
+                '${totalCost.toStringAsFixed(2)} TND',
+                Colors.green,
+                Icons.monetization_on,
+              ),
+              _buildPerformanceStat(
+                'Coût Moyen',
+                'Loc: ${rentedAverageCost.toStringAsFixed(2)} TND\nVendu: ${soldAverageCost.toStringAsFixed(2)} TND',
+                Colors.blue,
+                Icons.trending_up,
+              ),
+              _buildPerformanceStat(
+                'En Location',
+                activeCount.toString(),
+                Colors.orange,
+                Icons.local_shipping,
+              ),
+              _buildPerformanceStat(
+                'Retournés',
+                returnedCount.toString(),
+                Colors.teal,
+                Icons.assignment_returned,
+              ),
+              _buildPerformanceStat(
+                'Vendus',
+                soldCount.toString(),
+                Colors.deepOrange,
+                Icons.sell,
+              ),
+              _buildPerformanceStat(
+                'Quantité Totale',
+                totalQuantity.toString(),
+                Colors.purple,
+                Icons.inventory_2,
               ),
             ],
           ),
@@ -1322,8 +1636,18 @@ class _ManagerEquipmentRentalScreenContentState
   bool _isLoading = true;
   List<String> _allEquipmentTypes = [...baseEquipmentTypes];
   String _filterStatus = 'all';
+  String _statsEquipmentType = 'all';
   int _totalOxygenBottles = 0;
+  Map<String, int> _inventoryByEquipmentType = {};
   Map<String, String> _ambulanceNamesById = {};
+
+  String get _equipmentTypesPrefsKey {
+    final tenantId = widget.user.tenantId?.trim();
+    if (tenantId != null && tenantId.isNotEmpty) {
+      return 'custom_equipment_types_$tenantId';
+    }
+    return 'custom_equipment_types_user_${widget.user.id}';
+  }
 
   @override
   void initState() {
@@ -1360,13 +1684,13 @@ class _ManagerEquipmentRentalScreenContentState
     await _loadCustomEquipmentTypes();
     await _getTenantAmbulances();
     await _loadAllRentals();
-    await _loadOxygenBottlesInventory();
+    await _loadEquipmentInventories();
   }
 
   Future<void> _loadCustomEquipmentTypes() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final customTypes = prefs.getStringList('custom_equipment_types') ?? [];
+      final customTypes = prefs.getStringList(_equipmentTypesPrefsKey) ?? [];
       if (mounted) {
         setState(() {
           _allEquipmentTypes = [...baseEquipmentTypes, ...customTypes];
@@ -1565,7 +1889,7 @@ class _ManagerEquipmentRentalScreenContentState
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Définir Inventaire Oxygène'),
+        title: const Text('Définir Inventaire Oxygene'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1618,6 +1942,275 @@ class _ManagerEquipmentRentalScreenContentState
       default:
         return _allRentals;
     }
+  }
+
+  Future<void> _persistCustomEquipmentTypes(List<String> equipmentTypes) async {
+    final prefs = await SharedPreferences.getInstance();
+    final customTypes =
+        equipmentTypes
+            .map((type) => _canonicalEquipmentType(type))
+            .where(
+              (type) =>
+                  !baseEquipmentTypes.contains(type) &&
+                  !_isPlaceholderEquipmentType(type),
+            )
+            .toSet()
+            .toList()
+          ..sort();
+    await prefs.setStringList(_equipmentTypesPrefsKey, customTypes);
+  }
+
+  Future<void> _loadEquipmentInventories() async {
+    try {
+      final inventories = await _rentalService.getEquipmentInventories();
+      if (mounted) {
+        setState(() {
+          _inventoryByEquipmentType = inventories;
+          _totalOxygenBottles = inventories['Oxygene'] ?? 0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading equipment inventories: $e');
+      if (mounted) {
+        setState(() {
+          _inventoryByEquipmentType = {};
+          _totalOxygenBottles = 0;
+        });
+      }
+    }
+  }
+
+  String _normalizeEquipmentType(String value) => value.trim().toLowerCase();
+
+  bool _isInventoryEquipmentType(String value) =>
+      _normalizeEquipmentType(value).contains('invent');
+
+  bool _isPlaceholderEquipmentType(String value) {
+    final normalized = _normalizeEquipmentType(value);
+    return normalized == 'autre' || normalized == 'other';
+  }
+
+  bool _isOxygenEquipmentType(String value) =>
+      _normalizeEquipmentType(value).contains('oxy');
+
+  String _canonicalEquipmentType(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return 'Equipement';
+    if (_isOxygenEquipmentType(trimmed)) return 'Oxygene';
+    return trimmed;
+  }
+
+  String _selectedInventoryTypeLabel() =>
+      _statsEquipmentType == 'all' ? 'Stock' : _statsEquipmentType;
+
+  int _selectedInventoryQuantity() {
+    if (_statsEquipmentType == 'all') {
+      return _inventoryByEquipmentType.values.fold<int>(
+        0,
+        (sum, qty) => sum + qty,
+      );
+    }
+
+    if (_isOxygenEquipmentType(_statsEquipmentType)) {
+      return _inventoryByEquipmentType['Oxygene'] ?? 0;
+    }
+
+    return _inventoryByEquipmentType[_statsEquipmentType] ?? 0;
+  }
+
+  List<String> _getStatsEquipmentTypes() {
+    final uniqueTypes = <String>{};
+
+    for (final type in _allEquipmentTypes) {
+      final trimmed = type.trim();
+      if (trimmed.isEmpty ||
+          _isInventoryEquipmentType(trimmed) ||
+          _isPlaceholderEquipmentType(trimmed)) {
+        continue;
+      }
+      if (_isOxygenEquipmentType(trimmed)) {
+        uniqueTypes.add('Oxygene');
+      } else {
+        uniqueTypes.add(trimmed);
+      }
+    }
+
+    for (final rental in _allRentals) {
+      final trimmed = rental.equipmentType.trim();
+      if (trimmed.isEmpty ||
+          _isInventoryEquipmentType(trimmed) ||
+          _isPlaceholderEquipmentType(trimmed)) {
+        continue;
+      }
+      if (_isOxygenEquipmentType(trimmed)) {
+        uniqueTypes.add('Oxygene');
+      } else {
+        uniqueTypes.add(trimmed);
+      }
+    }
+
+    final sortedTypes = uniqueTypes.toList()..sort();
+    return ['all', ...sortedTypes];
+  }
+
+  List<EquipmentRental> _getStatsRentals() {
+    final rentalsOnly = _allRentals
+        .where((r) => r.metadata == null || r.metadata!.isEmpty)
+        .toList();
+
+    if (_statsEquipmentType == 'all') {
+      return rentalsOnly;
+    }
+
+    if (_isOxygenEquipmentType(_statsEquipmentType)) {
+      return rentalsOnly
+          .where((r) => _isOxygenEquipmentType(r.equipmentType))
+          .toList();
+    }
+
+    final selectedType = _normalizeEquipmentType(_statsEquipmentType);
+    return rentalsOnly
+        .where((r) => _normalizeEquipmentType(r.equipmentType) == selectedType)
+        .toList();
+  }
+
+  void _showDynamicInventoryDialog() {
+    final workingInventory = <String, int>{};
+    for (final entry in _inventoryByEquipmentType.entries) {
+      final canonicalType = _canonicalEquipmentType(entry.key);
+      workingInventory[canonicalType] = entry.value;
+    }
+    final equipmentTypes = <String>{
+      ..._allEquipmentTypes
+          .map((type) => _canonicalEquipmentType(type))
+          .where(
+            (type) => type.isNotEmpty && !_isPlaceholderEquipmentType(type),
+          ),
+      ...workingInventory.keys.where(
+        (type) => !_isPlaceholderEquipmentType(type),
+      ),
+    }.toList()..sort();
+
+    for (final type in equipmentTypes) {
+      workingInventory.putIfAbsent(type, () => 0);
+    }
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Définir Inventaire'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final type in equipmentTypes) ...[
+                    TextFormField(
+                      initialValue: (workingInventory[type] ?? 0).toString(),
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: type,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      onChanged: (value) {
+                        workingInventory[type] = int.tryParse(value) ?? 0;
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        final controller = TextEditingController();
+                        final newType = await showDialog<String>(
+                          context: context,
+                          builder: (nestedContext) => AlertDialog(
+                            title: const Text('Ajouter équipement'),
+                            content: TextFormField(
+                              controller: controller,
+                              autofocus: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Nom équipement',
+                              ),
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(nestedContext),
+                                child: const Text('Annuler'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(
+                                  nestedContext,
+                                  controller.text.trim(),
+                                ),
+                                child: const Text('Ajouter'),
+                              ),
+                            ],
+                          ),
+                        );
+
+                        if (newType == null ||
+                            newType.isEmpty ||
+                            _isPlaceholderEquipmentType(newType)) {
+                          return;
+                        }
+                        if (!equipmentTypes.contains(newType)) {
+                          setDialogState(() {
+                            equipmentTypes.add(newType);
+                            equipmentTypes.sort();
+                            workingInventory.putIfAbsent(newType, () => 0);
+                          });
+                        }
+                      },
+                      icon: const Icon(Icons.add),
+                      label: const Text('+ équipement'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Annuler'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final cleanedInventory = <String, int>{};
+                for (final type in equipmentTypes) {
+                  if (_isPlaceholderEquipmentType(type)) continue;
+                  final canonicalType = _canonicalEquipmentType(type);
+                  cleanedInventory[canonicalType] =
+                      workingInventory[canonicalType] ?? 0;
+                }
+
+                await _persistCustomEquipmentTypes(equipmentTypes);
+                await _rentalService.setEquipmentInventories(cleanedInventory);
+                if (!mounted) return;
+                setState(() {
+                  _allEquipmentTypes = [
+                    ...baseEquipmentTypes,
+                    ...equipmentTypes.where(
+                      (type) => !baseEquipmentTypes.contains(type),
+                    ),
+                  ];
+                  _inventoryByEquipmentType = cleanedInventory;
+                  _totalOxygenBottles = cleanedInventory['Oxygene'] ?? 0;
+                });
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Enregistrer'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showEditReturnDateDialog(EquipmentRental rental) {
@@ -2068,10 +2661,10 @@ class _ManagerEquipmentRentalScreenContentState
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _showSetInventoryDialog,
+              onPressed: _showDynamicInventoryDialog,
               icon: const Icon(Icons.inventory_2),
               label: Text(
-                'Inventaire Oxygène: $_totalOxygenBottles bouteilles',
+                'Inventaire: ${_inventoryByEquipmentType.length} types',
               ),
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.orange,
@@ -2239,10 +2832,8 @@ class _ManagerEquipmentRentalScreenContentState
   }
 
   Widget _buildPerformancePanel() {
-    // Exclude inventory records (metadata field is not null)
-    final rentalsOnly = _allRentals
-        .where((r) => r.metadata == null || r.metadata!.isEmpty)
-        .toList();
+    final rentalsOnly = _getStatsRentals();
+    final equipmentTypeOptions = _getStatsEquipmentTypes();
 
     final totalCost = rentalsOnly.fold<double>(0, (sum, r) => sum + r.cost);
     final soldItems = rentalsOnly.where((r) => _isSale(r)).toList();
@@ -2256,6 +2847,10 @@ class _ManagerEquipmentRentalScreenContentState
     final returnedCount = rentedItems
         .where((r) => r.isReturned == true)
         .fold<int>(0, (sum, r) => sum + r.quantity);
+    final totalQuantity = rentalsOnly.fold<int>(
+      0,
+      (sum, r) => sum + r.quantity,
+    );
 
     double averageCostFor(List<EquipmentRental> items) {
       final totalQuantity = items.fold<int>(0, (sum, r) => sum + r.quantity);
@@ -2265,19 +2860,12 @@ class _ManagerEquipmentRentalScreenContentState
 
     final rentedAverageCost = averageCostFor(rentedItems);
     final soldAverageCost = averageCostFor(soldItems);
-
-    // Calculate oxygen bottles rented and remaining
-    final oxygenRented = rentalsOnly
-        .where(
-          (r) =>
-              (r.equipmentType.toLowerCase().contains('oxy')) &&
-              r.transactionType == 'rental' &&
-              r.isReturned == false,
-        )
-        .fold<int>(0, (sum, r) => sum + r.quantity);
-    final oxygenRemaining = (_totalOxygenBottles - oxygenRented)
-        .clamp(0, _totalOxygenBottles)
-        .toInt();
+    final selectedInventoryQuantity = _selectedInventoryQuantity();
+    final selectedRentedQuantity = activeCount;
+    final selectedRemainingQuantity =
+        (selectedInventoryQuantity - selectedRentedQuantity) < 0
+        ? 0
+        : (selectedInventoryQuantity - selectedRentedQuantity);
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -2304,6 +2892,36 @@ class _ManagerEquipmentRentalScreenContentState
               color: Colors.grey[700],
               letterSpacing: 0.5,
             ),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            value: equipmentTypeOptions.contains(_statsEquipmentType)
+                ? _statsEquipmentType
+                : 'all',
+            decoration: InputDecoration(
+              labelText: 'Type d\'équipement',
+              filled: true,
+              fillColor: Colors.grey[50],
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+            ),
+            items: equipmentTypeOptions
+                .map(
+                  (type) => DropdownMenuItem<String>(
+                    value: type,
+                    child: Text(type == 'all' ? 'Tous les équipements' : type),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value == null) return;
+              setState(() => _statsEquipmentType = value);
+            },
           ),
           const SizedBox(height: 16),
           GridView.count(
@@ -2339,15 +2957,15 @@ class _ManagerEquipmentRentalScreenContentState
                 Icons.sell,
               ),
               _buildPerformanceStat(
-                'Oxygène Loué',
-                oxygenRented.toString(),
+                '${_selectedInventoryTypeLabel()} Loué',
+                selectedRentedQuantity.toString(),
                 Colors.red,
                 Icons.local_fire_department,
               ),
               _buildPerformanceStat(
-                'Oxygène Restant',
-                oxygenRemaining.toString(),
-                oxygenRemaining > 0 ? Colors.green : Colors.red,
+                '${_selectedInventoryTypeLabel()} Restant',
+                selectedRemainingQuantity.toString(),
+                selectedRemainingQuantity > 0 ? Colors.green : Colors.red,
                 Icons.science,
               ),
             ],

@@ -20,10 +20,8 @@ import 'settings/manager_settings_screen_optimized.dart';
 class ManagerDashboardScreen extends StatefulWidget {
   final User user;
 
-  const ManagerDashboardScreen({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const ManagerDashboardScreen({Key? key, required this.user})
+    : super(key: key);
 
   @override
   State<ManagerDashboardScreen> createState() => _ManagerDashboardScreenState();
@@ -36,7 +34,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _selectedNavIndex = 0;
   late final List<Widget>
-      _screens; // 🔥 Created ONCE in initState, never recreated
+  _screens; // 🔥 Created ONCE in initState, never recreated
 
   int totalMissions = 0;
   int activeMissions = 0;
@@ -50,6 +48,11 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   double revenueWeeklyChangePercent = 0;
   List<Mission> missions = [];
   List<Ambulance> ambulances = [];
+
+  String get _managerHeaderTitle {
+    final name = widget.user.name.trim();
+    return name.isNotEmpty ? name : 'Manager';
+  }
 
   Future<List<dynamic>> _attachClinicNames(List<dynamic> missionRows) async {
     final clinicTenantIds = missionRows
@@ -67,9 +70,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       final apiClient = ApiClient();
       final tenantRows = await apiClient.get(
         '/rest/v1/tenants',
-        filters: {
-          'id': 'in.(${clinicTenantIds.join(',')})',
-        },
+        filters: {'id': 'in.(${clinicTenantIds.join(',')})'},
       );
 
       final clinicNames = <String, String>{};
@@ -108,16 +109,19 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       Container(), // Placeholder - dashboard built dynamically in _buildContent()
       ManagerMissionsScreenContent(user: widget.user), // Tab 1: Missions
       ManagerAmbulancesScreenContent(
-          user: widget.user), // Tab 2: Fleet/Ambulances
+        user: widget.user,
+      ), // Tab 2: Fleet/Ambulances
       ManagerEquipmentRentalScreenContent(
-          user: widget.user), // Tab 3: Equipment Rentals
+        user: widget.user,
+      ), // Tab 3: Equipment Rentals
       ManagerHistoriqueScreenContent(user: widget.user), // Tab 4: Historique
       ManagerShiftsScreenContent(user: widget.user), // Tab 5: Shifts
       FleetViewerMapScreen(user: widget.user), // Tab 6: Live Fleet Tracking
       ManagerSettingsScreenOptimized(user: widget.user), // Tab 7: Settings
     ];
     print(
-        '[DEBUG] ManagerDashboard: _screens created with ${_screens.length} widgets');
+      '[DEBUG] ManagerDashboard: _screens created with ${_screens.length} widgets',
+    );
 
     _loadDashboardData();
   }
@@ -133,7 +137,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
     if (state == AppLifecycleState.resumed) {
       print('[DEBUG] App resumed - lifecycle event detected');
       debugPrint(
-          '[ManagerDashboardScreen] App resumed, reloading dashboard...');
+        '[ManagerDashboardScreen] App resumed, reloading dashboard...',
+      );
       _loadDashboardData();
       // Dashboard content will trigger nested widget lifecycle events
       // No need to force rebuild - keep widgets alive with IndexedStack
@@ -148,9 +153,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       final apiClient = ApiClient();
 
       print('📥 Fetching missions...');
-        final missionData = await apiClient.get(SupabaseConfig.missionsTable);
-        final enrichedMissionData = await _attachClinicNames(missionData);
-        print('✅ Missions fetched: ${missionData.length} records');
+      final missionData = await apiClient.get(SupabaseConfig.missionsTable);
+      final enrichedMissionData = await _attachClinicNames(missionData);
+      print('✅ Missions fetched: ${missionData.length} records');
 
       print('📥 Fetching ambulances...');
       final ambulanceData = await apiClient.get(SupabaseConfig.ambulancesTable);
@@ -159,15 +164,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       // Parse missions with error handling
       print('🔄 Parsing missions...');
       List<Mission> missionList = [];
-        for (int i = 0; i < enrichedMissionData.length; i++) {
-          try {
-            final mission = Mission.fromJson(enrichedMissionData[i]);
-            missionList.add(mission);
-          } catch (e) {
-            print('❌ Error parsing mission $i: $e');
-            print('   Data: ${enrichedMissionData[i]}');
-          }
+      for (int i = 0; i < enrichedMissionData.length; i++) {
+        try {
+          final mission = Mission.fromJson(enrichedMissionData[i]);
+          missionList.add(mission);
+        } catch (e) {
+          print('❌ Error parsing mission $i: $e');
+          print('   Data: ${enrichedMissionData[i]}');
         }
+      }
       print('✅ Parsed ${missionList.length} missions successfully');
 
       // Parse ambulances with error handling
@@ -201,8 +206,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         }).toList();
 
         // Calculate revenue from completed missions (sum actual prices)
-        final completedMissionsList =
-            missionList.where((m) => m.status == 'completed').toList();
+        final completedMissionsList = missionList
+            .where((m) => m.status == 'completed')
+            .toList();
         double calculatedRevenue = 0.0;
         for (var mission in completedMissionsList) {
           try {
@@ -215,9 +221,11 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
 
         // Calculate free ambulances based on active missions
         final activeMissionsWithAmbulance = missionList
-            .where((m) =>
-                (m.status == 'active' || m.status == 'pending') &&
-                m.ambulanceId.isNotEmpty)
+            .where(
+              (m) =>
+                  (m.status == 'active' || m.status == 'pending') &&
+                  m.ambulanceId.isNotEmpty,
+            )
             .toList();
 
         final occupiedAmbulanceIds = <String>{};
@@ -236,13 +244,16 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         for (var amb in ambulanceList) {
           final isOccupied = occupiedAmbulanceIds.contains(amb.id);
           debugPrint(
-              '   - ${amb.ambulanceNumber}: ${isOccupied ? 'BUSY' : 'FREE'}');
+            '   - ${amb.ambulanceNumber}: ${isOccupied ? 'BUSY' : 'FREE'}',
+          );
         }
         debugPrint(
-            '   - Active missions with ambulance: ${activeMissionsWithAmbulance.length}');
+          '   - Active missions with ambulance: ${activeMissionsWithAmbulance.length}',
+        );
         debugPrint('   - Occupied ambulances: ${occupiedAmbulanceIds.length}');
         debugPrint(
-            '   - Free ambulances: ${freeAmbList.length}/${ambulanceList.length}');
+          '   - Free ambulances: ${freeAmbList.length}/${ambulanceList.length}',
+        );
 
         // Calculate weekly percentage changes
         // THIS WEEK: missions from last 7 days
@@ -253,7 +264,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
             final isThisWeek = missionDate.isAfter(weekAgo);
             if (isThisWeek) {
               debugPrint(
-                  '  ✓ Mission ${m.missionNumber}: ${m.missionDate} (THIS WEEK)');
+                '  ✓ Mission ${m.missionNumber}: ${m.missionDate} (THIS WEEK)',
+              );
             }
             return isThisWeek;
           } catch (e) {
@@ -263,15 +275,17 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         }).toList();
 
         // THIS WEEK: completed missions from last 7 days
-        final thisWeekCompleted =
-            thisWeekMissions.where((m) => m.status == 'completed').toList();
+        final thisWeekCompleted = thisWeekMissions
+            .where((m) => m.status == 'completed')
+            .toList();
 
         // LAST WEEK: missions from 14 days ago to 7 days ago
         final lastWeekMissions = missionList.where((m) {
           try {
             final missionDate = DateTime.parse(m.missionDate);
-            final twoWeeksAgo =
-                DateTime.now().subtract(const Duration(days: 14));
+            final twoWeeksAgo = DateTime.now().subtract(
+              const Duration(days: 14),
+            );
             final weekAgo = DateTime.now().subtract(const Duration(days: 7));
             return missionDate.isAfter(twoWeeksAgo) &&
                 missionDate.isBefore(weekAgo);
@@ -281,14 +295,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         }).toList();
 
         // LAST WEEK: completed missions from 14 days ago to 7 days ago
-        final lastWeekCompleted =
-            lastWeekMissions.where((m) => m.status == 'completed').toList();
+        final lastWeekCompleted = lastWeekMissions
+            .where((m) => m.status == 'completed')
+            .toList();
 
         // Calculate trending percentages - compare THIS WEEK vs LAST WEEK
         double completedPercent = lastWeekCompleted.isNotEmpty
             ? ((thisWeekCompleted.length - lastWeekCompleted.length) /
-                lastWeekCompleted.length *
-                100)
+                  lastWeekCompleted.length *
+                  100)
             : 0.0;
         double revenuePercent = completedPercent;
 
@@ -298,13 +313,16 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         print('📊 Dashboard stats:');
         print('   - Total missions (ALL): ${missionList.length}');
         print(
-            '   - Active missions: ${missionList.where((m) => m.status == 'pending' || m.status == 'accepted').length}');
+          '   - Active missions: ${missionList.where((m) => m.status == 'pending' || m.status == 'accepted').length}',
+        );
         print('   - Completed (this week): ${thisWeekCompleted.length}');
         print('   - Last week completed: ${lastWeekCompleted.length}');
         print(
-            '   - Free ambulances: ${freeAmbList.length}/${ambulanceList.length}');
+          '   - Free ambulances: ${freeAmbList.length}/${ambulanceList.length}',
+        );
         print(
-            '   - Weekly change (completed): ${completedPercent.toStringAsFixed(1)}%');
+          '   - Weekly change (completed): ${completedPercent.toStringAsFixed(1)}%',
+        );
         print('   - Todays missions: ${todayMissions.length}');
         print('   - Ambulances: ${ambulanceList.length}');
 
@@ -338,7 +356,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           completedWeeklyChangePercent = completedPercent;
           revenueWeeklyChangePercent = revenuePercent;
           print(
-              '[DEBUG] setState() completed - totalMissions is now $totalMissions');
+            '[DEBUG] setState() completed - totalMissions is now $totalMissions',
+          );
         });
 
         print('✅ Dashboard data loaded successfully');
@@ -429,10 +448,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                       children: [
                         Text(
                           'Créer une Nouvelle Mission',
-                          style:
-                              Theme.of(context).textTheme.titleLarge?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         IconButton(
                           onPressed: () => Navigator.pop(context),
@@ -441,8 +458,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                       ],
                     ),
                     const SizedBox(height: 20),
-                    Text('Date et Heure',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Date et Heure',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -456,20 +475,27 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Priorité',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Priorité',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
                       value: selectedPriority,
                       decoration: InputDecoration(
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                       items: LocationData.priorityOptions.map((priority) {
                         return DropdownMenuItem(
-                            value: priority, child: Text(priority));
+                          value: priority,
+                          child: Text(priority),
+                        );
                       }).toList(),
                       onChanged: (value) {
                         if (value != null)
@@ -477,103 +503,134 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                       },
                     ),
                     const SizedBox(height: 16),
-                    Text('Lieu de Départ',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Lieu de Départ',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     _buildLocationSection(
-                        'From',
-                        selectedFromLocationType,
-                        (value) =>
-                            setState(() => selectedFromLocationType = value!),
-                        fromLocationManualController,
-                        selectedFromClinic,
-                        (value) => setState(() => selectedFromClinic = value!),
-                        'Sfax',
-                        (value) {}),
+                      'From',
+                      selectedFromLocationType,
+                      (value) =>
+                          setState(() => selectedFromLocationType = value!),
+                      fromLocationManualController,
+                      selectedFromClinic,
+                      (value) => setState(() => selectedFromClinic = value!),
+                      'Sfax',
+                      (value) {},
+                    ),
                     const SizedBox(height: 16),
-                    Text('Lieu de Destination',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Lieu de Destination',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     _buildLocationSection(
-                        'To',
-                        selectedToLocationType,
-                        (value) =>
-                            setState(() => selectedToLocationType = value!),
-                        toLocationManualController,
-                        selectedToClinic,
-                        (value) => setState(() => selectedToClinic = value!),
-                        'Sfax',
-                        (value) {}),
+                      'To',
+                      selectedToLocationType,
+                      (value) =>
+                          setState(() => selectedToLocationType = value!),
+                      toLocationManualController,
+                      selectedToClinic,
+                      (value) => setState(() => selectedToClinic = value!),
+                      'Sfax',
+                      (value) {},
+                    ),
                     const SizedBox(height: 16),
-                    Text('Nom du Patient',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Nom du Patient',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: patientNameController,
                       decoration: InputDecoration(
                         hintText: 'Nom complet',
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Téléphone du Patient',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Téléphone du Patient',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: patientPhoneController,
                       decoration: InputDecoration(
                         hintText: 'Numéro de téléphone',
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                       keyboardType: TextInputType.phone,
                     ),
                     const SizedBox(height: 16),
-                    Text('Infirmier/Médecin',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Infirmier/Médecin',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: infirmierController,
                       decoration: InputDecoration(
                         hintText: 'Nom',
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('Tarif',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Tarif',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: tarifController,
                       decoration: InputDecoration(
                         hintText: 'Montant',
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                       keyboardType: TextInputType.number,
                     ),
                     const SizedBox(height: 16),
-                    Text('Notes',
-                        style: Theme.of(context).textTheme.labelLarge),
+                    Text(
+                      'Notes',
+                      style: Theme.of(context).textTheme.labelLarge,
+                    ),
                     const SizedBox(height: 8),
                     TextFormField(
                       controller: notesController,
                       decoration: InputDecoration(
                         hintText: 'Notes supplémentaires',
                         border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                         contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 12),
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
                       ),
                       maxLines: 3,
                     ),
@@ -593,14 +650,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                           onPressed: () {
                             if (formKey.currentState?.validate() ?? false) {
                               print(
-                                  '\n🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫');
+                                '\n🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫',
+                              );
                               print(
-                                  '🟫 [Dashboard Dialog] CRÉER BUTTON CLICKED');
+                                '🟫 [Dashboard Dialog] CRÉER BUTTON CLICKED',
+                              );
                               print('🟫 Form validation: ✅ PASSED');
                               print(
-                                  '🟫 Dialog closing and calling _createMissionDirect()');
+                                '🟫 Dialog closing and calling _createMissionDirect()',
+                              );
                               print(
-                                  '🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫\n');
+                                '🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫🟫\n',
+                              );
                               Navigator.pop(context);
                               _createMissionDirect(
                                 generatedMissionNumber ?? 'MISS-AUTO-001',
@@ -638,10 +699,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   Future<String> _generateMissionNumber() async {
     try {
       final missionData = await _apiClient.get(SupabaseConfig.missionsTable);
-      final missions =
-          missionData.map((json) => Mission.fromJson(json)).toList();
+      final missions = missionData
+          .map((json) => Mission.fromJson(json))
+          .toList();
       final now = DateTime.now();
-      final datePrefix = now.year.toString() +
+      final datePrefix =
+          now.year.toString() +
           now.month.toString().padLeft(2, '0') +
           now.day.toString().padLeft(2, '0') +
           now.hour.toString().padLeft(2, '0');
@@ -655,7 +718,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         nextCounter = int.parse(counterStr) + 1;
         if (nextCounter > 999) {
           final nextDate = now.add(const Duration(hours: 1));
-          final newDatePrefix = nextDate.year.toString() +
+          final newDatePrefix =
+              nextDate.year.toString() +
               nextDate.month.toString().padLeft(2, '0') +
               nextDate.day.toString().padLeft(2, '0') +
               nextDate.hour.toString().padLeft(2, '0');
@@ -715,10 +779,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           TextFormField(
             controller: manualController,
             decoration: InputDecoration(
-              hintText:
-                  type == 'From' ? 'Lieu de départ' : 'Lieu de destination',
-              border:
-                  OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              hintText: type == 'From'
+                  ? 'Lieu de départ'
+                  : 'Lieu de destination',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
       ],
@@ -765,8 +831,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       // Extract first and last name from patient name
       final nameParts = patientName.split(' ');
       final firstName = nameParts.isNotEmpty ? nameParts.first : '';
-      final lastName =
-          nameParts.length > 1 ? nameParts.sublist(1).join(' ') : '';
+      final lastName = nameParts.length > 1
+          ? nameParts.sublist(1).join(' ')
+          : '';
       print('      firstName: \"$firstName\"');
       print('      lastName: \"$lastName\"');
 
@@ -795,8 +862,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         print('   ✅ _loadDashboardData() called');
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Mission créée avec succès'),
-              backgroundColor: Colors.green),
+            content: Text('Mission créée avec succès'),
+            backgroundColor: Colors.green,
+          ),
         );
         print('   ✅ SnackBar shown');
       } else {
@@ -810,8 +878,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         print('   ⚠️  Showing error snackbar');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Erreur: ${e.toString()}'),
-              backgroundColor: Colors.red),
+            content: Text('Erreur: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
       print('🟩 [_createMissionDirect] EXIT - FAILED\n');
@@ -881,9 +950,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                 );
               }
             },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
             child: const Text('Ajouter'),
           ),
         ],
@@ -907,16 +974,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         _loadDashboardData();
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-              content: Text('Ambulance ajoutée avec succès'),
-              backgroundColor: Colors.green),
+            content: Text('Ambulance ajoutée avec succès'),
+            backgroundColor: Colors.green,
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-              content: Text('Erreur: ${e.toString()}'),
-              backgroundColor: Colors.red),
+            content: Text('Erreur: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -925,7 +994,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   @override
   Widget build(BuildContext context) {
     print(
-        '[DEBUG] Dashboard build() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions');
+      '[DEBUG] Dashboard build() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions',
+    );
     return Scaffold(
       key: _scaffoldKey,
       backgroundColor: Colors.white,
@@ -948,9 +1018,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           // Header
           _buildHeader(),
           // Content
-          Expanded(
-            child: _buildContent(),
-          ),
+          Expanded(child: _buildContent()),
         ],
       ),
     );
@@ -964,9 +1032,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       ),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(
-          bottom: BorderSide(color: Colors.grey[300]!),
-        ),
+        border: Border(bottom: BorderSide(color: Colors.grey[300]!)),
       ),
       child: SafeArea(
         bottom: false,
@@ -992,12 +1058,12 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                   SizedBox(width: context.responsive.spacingSmall),
                   Expanded(
                     child: Text(
-                      'AmbuGestion',
+                      _managerHeaderTitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ],
@@ -1037,13 +1103,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
 
   Widget _buildContent() {
     print(
-        '[DEBUG] _buildContent() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions');
+      '[DEBUG] _buildContent() called - _selectedNavIndex=$_selectedNavIndex, totalMissions=$totalMissions',
+    );
     // 🔥 Dashboard is built DYNAMICALLY so it gets fresh data on setState()
     // Other tabs persist in _screens to avoid recreation
     if (_selectedNavIndex == 0) {
       print('[DEBUG] Building DASHBOARD content (index 0)');
       print(
-          '[DEBUG] Dashboard will show: $totalMissions missions, $totalAmbulances ambulances');
+        '[DEBUG] Dashboard will show: $totalMissions missions, $totalAmbulances ambulances',
+      );
       return _buildDashboardContent(); // Builds fresh every time state changes with new data
     }
 
@@ -1060,16 +1128,16 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           // Title
           Text(
             'Aperçu du Gestionnaire',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
           ),
           SizedBox(height: context.responsive.spacingXSmall),
           Text(
             'Surveillance des opérations en temps réel',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey[600],
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: Colors.grey[600]),
           ),
           SizedBox(height: context.responsive.spacingXLarge),
 
@@ -1089,7 +1157,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                 true,
               ),
               _buildSmallStatCard(
-                'MISSIONS COMPLÉTÉES',
+                'MISSIONS COMPLÉTÉES / SEMAINE',
                 completedMissions.toString(),
                 completedWeeklyChangePercent > 0
                     ? '+${completedWeeklyChangePercent.toStringAsFixed(1)}%'
@@ -1097,7 +1165,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                 completedWeeklyChangePercent >= 0,
               ),
               _buildSmallStatCard(
-                'REVENUS TOTAUX',
+                'REVENUS TOTAUX / SEMAINE',
                 '${totalRevenue.toStringAsFixed(0)} TND',
                 revenueWeeklyChangePercent > 0
                     ? '+${revenueWeeklyChangePercent.toStringAsFixed(1)}%'
@@ -1128,9 +1196,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           // Missions Aujourd'hui
           Text(
             'Missions Aujourd\'hui',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           SizedBox(height: context.responsive.spacingMedium),
           _buildTodayMissions(),
@@ -1139,9 +1207,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           // Active Fleet Status
           Text(
             'État de la Flotte Active',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           SizedBox(height: context.responsive.spacingMedium),
           _buildActiveFleetStatus(),
@@ -1151,7 +1219,11 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   }
 
   Widget _buildStatCard(
-      String label, String value, String change, bool isPositive) {
+    String label,
+    String value,
+    String change,
+    bool isPositive,
+  ) {
     return Container(
       padding: EdgeInsets.all(context.responsive.paddingValueMedium),
       decoration: BoxDecoration(
@@ -1173,9 +1245,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           Text(
             label,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w600,
-                ),
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w600,
+            ),
           ),
           SizedBox(height: context.responsive.spacingSmall),
           Row(
@@ -1185,8 +1257,8 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
               Text(
                 value,
                 style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               Row(
                 children: [
@@ -1214,7 +1286,11 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   }
 
   Widget _buildSmallStatCard(
-      String label, String value, String change, bool isPositive) {
+    String label,
+    String value,
+    String change,
+    bool isPositive,
+  ) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1236,10 +1312,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           Text(
             label,
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Colors.grey[600],
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
+              color: Colors.grey[600],
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -1252,9 +1328,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                 child: Text(
                   value,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 24,
-                      ),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 24,
+                  ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1304,11 +1380,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  Icons.location_on,
-                  size: 48,
-                  color: Colors.grey[400],
-                ),
+                Icon(Icons.location_on, size: 48, color: Colors.grey[400]),
                 const SizedBox(height: 12),
                 Text(
                   'Intégration carte en cours...',
@@ -1414,32 +1486,33 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       child: ListView.builder(
         shrinkWrap: true,
         physics: const AlwaysScrollableScrollPhysics(),
-          itemCount:
-              todayMissions.length, // Show ALL missions, user scrolls to see
-          itemBuilder: (context, index) {
-            final mission = todayMissions[index];
-            final clinicName = mission.clinicName?.trim();
-            final clinicLabel = (clinicName != null && clinicName.isNotEmpty)
-                ? clinicName
-                : 'Mission clinique';
-            final isClinicMission = mission.clinicTenantId != null &&
-                mission.clinicTenantId!.isNotEmpty;
-            final statusColor = mission.status == 'completed'
-                ? Colors.green
-                : mission.status == 'accepted'
-                    ? Colors.orange
-                    : Colors.blue;
+        itemCount:
+            todayMissions.length, // Show ALL missions, user scrolls to see
+        itemBuilder: (context, index) {
+          final mission = todayMissions[index];
+          final clinicName = mission.clinicName?.trim();
+          final clinicLabel = (clinicName != null && clinicName.isNotEmpty)
+              ? clinicName
+              : 'Mission clinique';
+          final isClinicMission =
+              mission.clinicTenantId != null &&
+              mission.clinicTenantId!.isNotEmpty;
+          final statusColor = mission.status == 'completed'
+              ? Colors.green
+              : mission.status == 'accepted'
+              ? Colors.orange
+              : Colors.blue;
 
-            return Container(
-              decoration: BoxDecoration(
-                color: isClinicMission
-                    ? const Color(0xFFF8F5FF)
-                    : Colors.transparent,
-                border: index < todayMissions.length - 1
-                    ? Border(bottom: BorderSide(color: Colors.grey[200]!))
-                    : null,
-              ),
-              padding: const EdgeInsets.all(12),
+          return Container(
+            decoration: BoxDecoration(
+              color: isClinicMission
+                  ? const Color(0xFFF8F5FF)
+                  : Colors.transparent,
+              border: index < todayMissions.length - 1
+                  ? Border(bottom: BorderSide(color: Colors.grey[200]!))
+                  : null,
+            ),
+            padding: const EdgeInsets.all(12),
             child: Row(
               children: [
                 Container(
@@ -1451,54 +1524,51 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                   ),
                 ),
                 const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (isClinicMission) ...[
-                          Container(
-                            margin: const EdgeInsets.only(bottom: 6),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isClinicMission) ...[
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF7C3AED), Color(0xFF2563EB)],
                             ),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [
-                                  Color(0xFF7C3AED),
-                                  Color(0xFF2563EB),
-                                ],
-                              ),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Text(
-                              'Clinique: $clinicLabel',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w700,
-                              ),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            'Clinique: $clinicLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
-                        ],
-                        Text(
-                          'Mission #${mission.missionNumber}',
-                          style:
-                              Theme.of(context).textTheme.labelMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                    color: isClinicMission
-                                        ? const Color(0xFF6D28D9)
-                                        : null,
-                                  ),
                         ),
+                      ],
+                      Text(
+                        'Mission #${mission.missionNumber}',
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: isClinicMission
+                                  ? const Color(0xFF6D28D9)
+                                  : null,
+                            ),
+                      ),
                       const SizedBox(height: 4),
                       Text(
                         '${mission.fromLocation} → ${mission.toLocation}',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                              color: Colors.grey[600],
-                            ),
+                          color: Colors.grey[600],
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1507,15 +1577,19 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                 ),
                 const SizedBox(width: 12),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: statusColor.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
                     mission.status.replaceFirst(
-                        mission.status[0], mission.status[0].toUpperCase()),
+                      mission.status[0],
+                      mission.status[0].toUpperCase(),
+                    ),
                     style: TextStyle(
                       color: statusColor,
                       fontWeight: FontWeight.w600,
@@ -1556,16 +1630,19 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       children: ambulances.take(3).map((ambulance) {
         // Find active mission for this ambulance
         final activeMission = missions
-            .where((m) =>
-                m.ambulanceId == ambulance.id &&
-                (m.status == 'active' || m.status == 'pending'))
+            .where(
+              (m) =>
+                  m.ambulanceId == ambulance.id &&
+                  (m.status == 'active' || m.status == 'pending'),
+            )
             .firstOrNull;
 
         final hasMission = activeMission != null;
         final statusColor = hasMission ? Colors.orange : Colors.green;
         final statusText = hasMission ? 'EN MISSION' : 'DISPONIBLE';
-        final destination =
-            hasMission ? activeMission!.toLocation : 'En attente';
+        final destination = hasMission
+            ? activeMission!.toLocation
+            : 'En attente';
         final icon = hasMission ? Icons.directions_car : Icons.check_circle;
 
         return Container(
@@ -1603,11 +1680,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                   color: statusColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(
-                  icon,
-                  color: statusColor,
-                  size: 24,
-                ),
+                child: Icon(icon, color: statusColor, size: 24),
               ),
               const SizedBox(width: 12),
               // Content
@@ -1618,25 +1691,25 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                     Text(
                       ambulance.ambulanceNumber ?? 'N/A',
                       style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       statusText,
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: statusColor,
-                            fontWeight: FontWeight.w600,
-                          ),
+                        color: statusColor,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       hasMission
                           ? '📍 Vers: $destination'
                           : 'Prête à être dépêchée',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                            color: Colors.grey[500],
-                          ),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelSmall?.copyWith(color: Colors.grey[500]),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1646,8 +1719,10 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
               const SizedBox(width: 12),
               // Status badge
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
                   color: statusColor.withOpacity(0.1),
                   borderRadius: BorderRadius.circular(20),
@@ -1711,11 +1786,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
               color: accentColor.withOpacity(0.1),
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Icon(
-              icon,
-              color: accentColor,
-              size: 24,
-            ),
+            child: Icon(icon, color: accentColor, size: 24),
           ),
           const SizedBox(width: 12),
           // Content
@@ -1725,23 +1796,23 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
               children: [
                 Text(
                   ambulanceId,
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   status,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey[600],
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   location,
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: Colors.grey[500],
-                      ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: Colors.grey[500]),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -1774,9 +1845,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
 
     return Container(
       decoration: BoxDecoration(
-        border: Border(
-          top: BorderSide(color: Colors.grey[200]!),
-        ),
+        border: Border(top: BorderSide(color: Colors.grey[200]!)),
       ),
       child: isMobile
           ? _buildMobileBottomNav() // Icons only for mobile
@@ -1822,13 +1891,13 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.badge),
-          label: 'Shifts',
-          tooltip: 'Shifts',
+          label: 'Gardes',
+          tooltip: 'Gardes',
         ),
         BottomNavigationBarItem(
           icon: Icon(Icons.map),
-          label: 'Tracking',
-          tooltip: 'Suivi Temps Réel',
+          label: 'Suivi',
+          tooltip: 'Suivi en temps réel',
         ),
       ],
       onTap: (index) {
@@ -1850,10 +1919,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       selectedItemColor: AppColors.primary,
       unselectedItemColor: Colors.grey,
       items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.home),
-          label: 'ACCUEIL',
-        ),
+        BottomNavigationBarItem(icon: Icon(Icons.home), label: 'ACCUEIL'),
         BottomNavigationBarItem(
           icon: Icon(Icons.assignment),
           label: 'MISSIONS',
@@ -1866,18 +1932,9 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           icon: Icon(Icons.medical_services),
           label: 'ÉQUIPEMENTS',
         ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.history),
-          label: 'HISTORIQUE',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.badge),
-          label: 'SHIFTS',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.map),
-          label: 'TRACKING',
-        ),
+        BottomNavigationBarItem(icon: Icon(Icons.history), label: 'HISTORIQUE'),
+        BottomNavigationBarItem(icon: Icon(Icons.badge), label: 'GARDES'),
+        BottomNavigationBarItem(icon: Icon(Icons.map), label: 'SUIVI'),
       ],
       onTap: (index) {
         print('[DEBUG] Tab tapped: index=$index (was $_selectedNavIndex)');

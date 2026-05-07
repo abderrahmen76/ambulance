@@ -728,9 +728,10 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
                       'MISSION #${mission.missionNumber}',
                       style: const TextStyle(
@@ -748,7 +749,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                             color: accentColor,
                           ),
                           const SizedBox(width: 6),
-                          Expanded(
+                          Flexible(
                             child: Text(
                               clinicLabel,
                               maxLines: 1,
@@ -775,9 +776,10 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                     ),
                   ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
                     color: isPriority
                         ? Colors.red
                         : (isClinicMission ? accentColor : Colors.blue),
@@ -1517,12 +1519,11 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
               children: [
                 TextFormField(
                   controller: missionNumberCtrl,
+                  enabled: false,
                   decoration: const InputDecoration(
                     labelText: 'Numéro de Mission',
                     border: OutlineInputBorder(),
                   ),
-                  validator: (value) =>
-                      value?.isEmpty ?? true ? 'Requis' : null,
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -2508,12 +2509,11 @@ class _ManagerMissionsScreenContentState
               children: [
                 TextFormField(
                   controller: missionNumberCtrl,
+                  enabled: false,
                   decoration: const InputDecoration(
                     labelText: 'Numéro de Mission',
                     border: OutlineInputBorder(),
                   ),
-                  validator: (value) =>
-                      value?.isEmpty ?? true ? 'Requis' : null,
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
@@ -3104,9 +3104,10 @@ class _ManagerMissionsScreenContentState
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
                       'MISSION #${mission.missionNumber}',
                       style: const TextStyle(
@@ -3124,7 +3125,7 @@ class _ManagerMissionsScreenContentState
                             color: accentColor,
                           ),
                           const SizedBox(width: 6),
-                          Expanded(
+                          Flexible(
                             child: Text(
                               clinicLabel,
                               maxLines: 1,
@@ -3151,9 +3152,10 @@ class _ManagerMissionsScreenContentState
                     ),
                   ],
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
                     color: isPriority
                         ? Colors.red
                         : (isClinicMission ? accentColor : Colors.blue),

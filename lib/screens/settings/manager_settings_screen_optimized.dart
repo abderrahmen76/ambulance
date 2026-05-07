@@ -717,6 +717,19 @@ class _ManagerSettingsScreenOptimizedState
     return labels[type.trim().toLowerCase()] ?? type;
   }
 
+  String _formatRoleLabel(String? role) {
+    switch (role?.trim().toLowerCase()) {
+      case 'driver':
+        return 'Chauffeur';
+      case 'manager':
+        return 'Manager';
+      case 'admin':
+        return 'Administrateur';
+      default:
+        return role?.trim().isNotEmpty == true ? role!.trim() : 'Chauffeur';
+    }
+  }
+
   Future<bool> _showDeleteConfirmation({
     required String title,
     required String message,
@@ -810,7 +823,7 @@ class _ManagerSettingsScreenOptimizedState
 
   Widget _buildCompanySection() {
     return _buildSectionCard(
-      title: 'Company Values',
+      title: 'Informations de la société',
       subtitle: 'Modifiez les informations principales de la société.',
       trailing: ElevatedButton.icon(
         onPressed: _isSavingCompany ? null : _saveCompanyValues,
@@ -877,7 +890,7 @@ class _ManagerSettingsScreenOptimizedState
 
   Widget _buildDriversSection() {
     return _buildSectionCard(
-      title: 'Drivers Management',
+      title: 'Gestion des chauffeurs',
       subtitle: 'Ajoutez, modifiez et supprimez les profils chauffeurs.',
       trailing: ElevatedButton.icon(
         onPressed: () => _showDriverDialog(),
@@ -892,7 +905,7 @@ class _ManagerSettingsScreenOptimizedState
                     (driver) => _SimpleListTileCard(
                       title: driver.name,
                       subtitle: driver.email,
-                      extra: driver.roleLabel ?? driver.role ?? 'driver',
+                      extra: _formatRoleLabel(driver.roleLabel ?? driver.role),
                       onEdit: () => _showDriverDialog(driver: driver),
                       onDelete: () => _deleteDriver(driver),
                     ),
@@ -904,7 +917,7 @@ class _ManagerSettingsScreenOptimizedState
 
   Widget _buildAmbulancesSection() {
     return _buildSectionCard(
-      title: 'Ambulances Management',
+      title: 'Gestion des ambulances',
       subtitle: 'Ajoutez, modifiez et supprimez les ambulances.',
       trailing: ElevatedButton.icon(
         onPressed: () => _showAmbulanceDialog(),

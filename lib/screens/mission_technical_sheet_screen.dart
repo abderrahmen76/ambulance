@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/constants.dart';
@@ -25,6 +25,7 @@ class _MissionTechnicalSheetScreenState
   final MissionPrivateService _missionPrivateService = MissionPrivateService();
   final ScreenProtectionService _screenProtectionService =
       ScreenProtectionService();
+  String? _missionPhotoSignedUrl;
   late TextEditingController _patientNameController;
   late TextEditingController _ageController;
   String? _selectedMotifTransport;
@@ -59,22 +60,22 @@ class _MissionTechnicalSheetScreenState
 
   // Default options for medical history
   final defaultMedicalHistoryOptions = [
-    ('Diabétique', 'diabetic'),
+    ('Diabetique', 'diabetic'),
     ('HTA', 'hta'),
     ('Douleur Thoracique', 'douleur_thoracique'),
     ('Dialyse', 'dialysis'),
-    ('Détresse Respiratoire', 'distresse_respiratoire'),
+    ('Detresse Respiratoire', 'distresse_respiratoire'),
     ('Hypotension', 'hypalepsie'),
     ('Maladie Coronarienne', 'coronaria'),
     ('Cardiaque', 'cardiaque'),
     ('BPCO', 'bpco'),
     ('Asthme', 'asthme'),
-    ('Épilepsie', 'epilepsie'),
+    ('Epilepsie', 'epilepsie'),
   ];
 
   // Default options for patient needs
   final defaultPatientNeedsOptions = [
-    ('Oxygène', 'oxygen'),
+    ('Oxygene', 'oxygen'),
     ('Perfusion', 'perfusion'),
     ('Monitorage', 'monitorage'),
     ('Pansement', 'pensement'),
@@ -90,9 +91,9 @@ class _MissionTechnicalSheetScreenState
 
   // Nested options for special patient needs
   final Map<String, List<String>> nestedPatientNeedsOptions = {
-    'vni': ['pep', 'aide', 'FR', 'VCC'],
+    'vni': ['pep', 'aide', 'FR', 'fie2+vc'],
     'vc': ['courant', 'FR', 'PEP'],
-    'pse': ['noradé', 'adré', 'sedation', 'heparine', 'rivotril'],
+    'pse': ['norade', 'adre', 'sedation', 'heparine', 'rivotril'],
   };
 
   // Map to store selected sub-options: key=needId, value=subOption
@@ -105,6 +106,11 @@ class _MissionTechnicalSheetScreenState
   // Checkbox states - key is item label, value is checked
   Map<String, bool> medicalHistoryChecked = {};
   Map<String, TextEditingController> patientNeedsState = {};
+  Map<String, bool> patientNeedsToggleState = {
+    'Monitorage': true,
+    'Pansement': true,
+    'Immobilisation': true,
+  };
 
   // Nested quantities for VNI and VC (no parent quantity)
   // Key=needId (vni/vc), Value=Map<optionName, TextEditingController>
@@ -121,6 +127,7 @@ class _MissionTechnicalSheetScreenState
   // Custom items added by user (persisted)
   List<String> customMedicalHistoryItems = [];
   List<String> customPatientNeedsItems = [];
+  List<Map<String, TextEditingController>> medicationControllers = [];
 
   bool _isLoading = false;
   bool _isSendingToClinic = false;
@@ -186,16 +193,24 @@ class _MissionTechnicalSheetScreenState
       debugPrint(
         '[MissionTechnicalSheet] Fresh mission fetched: ${freshMission?.id}',
       );
-      if (freshMission != null && mounted) {
-        final mergedMission = _mergeMissionWithPrivatePayload(
-          freshMission,
-          privatePayload,
-        );
-        setState(() {
-          _currentMission = mergedMission;
-          debugPrint(
-            '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}',
+        if (freshMission != null && mounted) {
+          final mergedMission = _mergeMissionWithPrivatePayload(
+            freshMission,
+            privatePayload,
           );
+          setState(() {
+            _currentMission = mergedMission;
+            final missionPhotoPayload =
+                privatePayload['mission_photo'] is Map<String, dynamic>
+                ? Map<String, dynamic>.from(
+                    privatePayload['mission_photo'] as Map<String, dynamic>,
+                  )
+                : <String, dynamic>{};
+            _missionPhotoSignedUrl =
+                missionPhotoPayload['signed_url']?.toString();
+            debugPrint(
+              '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}',
+            );
           debugPrint(
             '[MissionTechnicalSheet] Patient Needs Raw: ${_currentMission.patientNeeds}',
           );
@@ -281,6 +296,8 @@ class _MissionTechnicalSheetScreenState
           medical['vital_signs'] ?? mergedJson['vital_signs'];
       mergedJson['patient_needs'] =
           medical['patient_needs'] ?? mergedJson['patient_needs'];
+      mergedJson['medications'] =
+          medical['medications'] ?? mergedJson['medications'];
     }
 
     return Mission.fromJson(mergedJson);
@@ -446,12 +463,11 @@ class _MissionTechnicalSheetScreenState
       } else if (needId == 'pse') {
         // Initialize parent quantity for PSE
         patientNeedsState[label] = TextEditingController(text: '0');
-        // Initialize nested quantity and time controllers
+        // Initialize nested vitesse controllers
         for (var nestedOption in nestedPatientNeedsOptions[needId] ?? []) {
           nestedQuantities[needId]![nestedOption] = TextEditingController(
             text: '0',
           );
-          pseTimeInputs[nestedOption] = TextEditingController(text: '');
         }
       } else {
         // Regular items with quantity
@@ -548,23 +564,22 @@ class _MissionTechnicalSheetScreenState
                       }
                     }
                   } else if (needId == 'pse') {
-                    // Handle PSE: parent quantity + children with quantity and time
+                    // Handle PSE: parent quantity + children with vitesse field
                     patientNeedsState[needName]!.text = quantity;
                     if (children.isNotEmpty) {
                       for (var child in children) {
                         if (child is Map<String, dynamic>) {
                           final childName = child['name'] as String?;
-                          final childQty = child['quantity']?.toString() ?? '0';
-                          final childTime = child['time']?.toString() ?? '';
+                          final childQty =
+                              (child['vitesse'] ?? child['quantity'])
+                                      ?.toString() ??
+                                  '0';
                           if (childName != null) {
                             if (nestedQuantities[needId]!.containsKey(
                               childName,
                             )) {
                               nestedQuantities[needId]![childName]!.text =
                                   childQty;
-                            }
-                            if (pseTimeInputs.containsKey(childName)) {
-                              pseTimeInputs[childName]!.text = childTime;
                             }
                           }
                         }
@@ -662,23 +677,22 @@ class _MissionTechnicalSheetScreenState
                     '[MissionTechnicalSheet] Updated VNI/VC need (Map): $needName',
                   );
                 } else if (needId == 'pse') {
-                  // Handle PSE: parent quantity + children with quantity and time
+                  // Handle PSE: parent quantity + children with vitesse field
                   patientNeedsState[needName]!.text = quantity;
                   if (children.isNotEmpty) {
                     for (var child in children) {
                       if (child is Map<String, dynamic>) {
                         final childName = child['name'] as String?;
-                        final childQty = child['quantity']?.toString() ?? '0';
-                        final childTime = child['time']?.toString() ?? '';
+                        final childQty =
+                            (child['vitesse'] ?? child['quantity'])
+                                    ?.toString() ??
+                                '0';
                         if (childName != null) {
                           if (nestedQuantities[needId]!.containsKey(
                             childName,
                           )) {
                             nestedQuantities[needId]![childName]!.text =
                                 childQty;
-                          }
-                          if (pseTimeInputs.containsKey(childName)) {
-                            pseTimeInputs[childName]!.text = childTime;
                           }
                         }
                       }
@@ -728,6 +742,14 @@ class _MissionTechnicalSheetScreenState
       debugPrint('[MissionTechnicalSheet] Patient needs is null or empty');
     }
 
+    if (_currentMission.patientNeeds != null &&
+        _currentMission.patientNeeds!.isNotEmpty) {
+      for (final needName in ['Monitorage', 'Pansement', 'Immobilisation']) {
+        final currentValue = patientNeedsState[needName]?.text ?? '0';
+        patientNeedsToggleState[needName] = currentValue != '0';
+      }
+    }
+
     // Load existing motif de transport
     if (_currentMission.fracturesInjuries != null &&
         _currentMission.fracturesInjuries!.isNotEmpty) {
@@ -740,6 +762,8 @@ class _MissionTechnicalSheetScreenState
     if (_currentMission.reportType != null) {
       _reportType = _currentMission.reportType!;
     }
+
+    _loadMedications();
 
     // Final summary log
     debugPrint('[MissionTechnicalSheet] === FINAL STATE ===');
@@ -759,7 +783,38 @@ class _MissionTechnicalSheetScreenState
     debugPrint(
       '[MissionTechnicalSheet] Custom Patient Needs: $customPatientNeedsItems',
     );
+    debugPrint(
+      '[MissionTechnicalSheet] Medications Loaded: ${medicationControllers.length}',
+    );
     debugPrint('[MissionTechnicalSheet] === END FINAL STATE ===');
+  }
+
+  void _loadMedications() {
+    for (final medication in medicationControllers) {
+      for (final controller in medication.values) {
+        controller.dispose();
+      }
+    }
+    medicationControllers.clear();
+
+    final medications = _currentMission.medications;
+    if (medications == null || medications.isEmpty) {
+      return;
+    }
+
+    for (final medication in medications) {
+      medicationControllers.add({
+        'name': TextEditingController(
+          text: medication['name']?.toString() ?? '',
+        ),
+        'dosage': TextEditingController(
+          text: medication['dosage']?.toString() ?? '',
+        ),
+        'frequency': TextEditingController(
+          text: medication['frequency']?.toString() ?? '',
+        ),
+      });
+    }
   }
 
   @override
@@ -782,6 +837,12 @@ class _MissionTechnicalSheetScreenState
     // Dispose all patient needs quantity controllers
     for (var controller in patientNeedsState.values) {
       controller.dispose();
+    }
+
+    for (final medication in medicationControllers) {
+      for (final controller in medication.values) {
+        controller.dispose();
+      }
     }
 
     _screenProtectionService.disable();
@@ -916,13 +977,8 @@ class _MissionTechnicalSheetScreenState
             List<Map<String, dynamic>> children = [];
             for (var nested in nestedPatientNeedsOptions[needId] ?? []) {
               final nestedQty = nestedQuantities[needId]![nested]?.text ?? '0';
-              final nestedTime = pseTimeInputs[nested]?.text ?? '';
-              if (nestedQty != '0' || nestedTime.isNotEmpty) {
-                children.add({
-                  'name': nested,
-                  'quantity': nestedQty,
-                  'time': nestedTime,
-                });
+              if (nestedQty != '0' && nestedQty.isNotEmpty) {
+                children.add({'name': nested, 'vitesse': nestedQty});
               }
             }
             needsData.add({
@@ -933,7 +989,12 @@ class _MissionTechnicalSheetScreenState
           }
         }
         // Regular items with quantity only
-        else if (quantity != '0') {
+        else if ((needName == 'Monitorage' ||
+                needName == 'Pansement' ||
+                needName == 'Immobilisation') &&
+            !(patientNeedsToggleState[needName] ?? true)) {
+          return;
+        } else if (quantity != '0') {
           needsData.add({'name': needName, 'quantity': quantity});
         }
       });
@@ -948,6 +1009,7 @@ class _MissionTechnicalSheetScreenState
       final patientNeedsPayload = _reportType == 'simple_transport'
           ? needsData
           : <String, dynamic>{};
+      final medicationsPayload = _buildMedicationsPayload();
 
       await _missionPrivateService.saveTechnicalSheet(
         mission: _currentMission,
@@ -964,12 +1026,13 @@ class _MissionTechnicalSheetScreenState
         vitalSigns: vitalSigns,
         medicalHistory: medicalHistoryPayload,
         patientNeeds: patientNeedsPayload,
+        medications: medicationsPayload,
       );
 
       await _refreshMissionData();
 
       if (mounted) {
-        _showSnackbar('Rapport enregistré avec succès!', Colors.green);
+        _showSnackbar('Rapport enregistre avec succes!', Colors.green);
         if (popOnSuccess) {
           Navigator.pop(context);
         }
@@ -1045,6 +1108,155 @@ class _MissionTechnicalSheetScreenState
     }
   }
 
+  Widget _buildMissionPhotoSection() {
+    final imageUrl = _missionPhotoSignedUrl;
+    if (imageUrl == null || imageUrl.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.orange[50],
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.orange[100]!),
+        ),
+        child: const Text(
+          'La photo jointe existe, mais elle ne peut pas etre chargee pour le moment.',
+          style: TextStyle(
+            color: Colors.deepOrange,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return InkWell(
+      onTap: () => _showMissionPhotoDialog(imageUrl),
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.blueGrey.shade100),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(
+                  Icons.photo_camera_back_rounded,
+                  color: AppColors.primary,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Photo jointe a la mission',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network(
+                imageUrl,
+                width: double.infinity,
+                height: 220,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  height: 220,
+                  color: Colors.grey[200],
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.broken_image_outlined,
+                    size: 40,
+                    color: Colors.grey,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Touchez la photo pour l agrandir.',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMissionPhotoDialog(String imageUrl) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.all(18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Photo de la mission',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: InteractiveViewer(
+                minScale: 0.8,
+                maxScale: 4,
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => Container(
+                    height: 220,
+                    alignment: Alignment.center,
+                    padding: const EdgeInsets.all(24),
+                    child: const Text(
+                      'Impossible de charger cette photo.',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showSnackbar(String message, Color color) {
     ScaffoldMessenger.of(
       context,
@@ -1060,7 +1272,7 @@ class _MissionTechnicalSheetScreenState
           onPressed: () => Navigator.pop(context),
         ),
         title: const Text(
-          'Fiche Technique Médicale',
+          'Fiche Technique Medicale',
           style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
@@ -1073,7 +1285,7 @@ class _MissionTechnicalSheetScreenState
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Patient Information Section
-            _buildSectionHeader('👤 Informations du Patient'),
+            _buildSectionHeader('Informations du Patient'),
             const SizedBox(height: 16),
             _buildTextField(
               'Nom Complet',
@@ -1081,17 +1293,21 @@ class _MissionTechnicalSheetScreenState
               'ex: Jean Dupont',
             ),
             const SizedBox(height: 12),
-            _buildTextField('Âge', _ageController, 'Années'),
+            _buildTextField('Age', _ageController, 'Annees'),
             const SizedBox(height: 12),
             _buildMotifTransportDropdown(),
+            if (_currentMission.hasMissionPhoto) ...[
+              const SizedBox(height: 16),
+              _buildMissionPhotoSection(),
+            ],
             const SizedBox(height: 24),
 
             // Report Type Selection
-            _buildSectionHeader('📋 Type de Rapport'),
+            _buildSectionHeader('Type de Rapport'),
             const SizedBox(height: 12),
             RadioListTile<String>(
               title: const Text('Transport Simple'),
-              subtitle: const Text('Patient avec détails médicaux'),
+              subtitle: const Text('Patient avec details medicaux'),
               value: 'simple_transport',
               groupValue: _reportType,
               onChanged: (value) {
@@ -1101,8 +1317,8 @@ class _MissionTechnicalSheetScreenState
               },
             ),
             RadioListTile<String>(
-              title: const Text('Décédé'),
-              subtitle: const Text('Patient est décédé'),
+              title: const Text('Decede'),
+              subtitle: const Text('Patient est decede'),
               value: 'deceased',
               groupValue: _reportType,
               onChanged: (value) {
@@ -1115,148 +1331,36 @@ class _MissionTechnicalSheetScreenState
 
             // Vital Signs (hidden when deceased)
             if (_reportType != 'deceased') ...[
-              _buildSectionHeader('📊 Signes Vitaux'),
+              _buildSectionHeader('Signes Vitaux'),
               const SizedBox(height: 12),
-              // Row 1: TA Before | TA After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'TA Avant (MMHG)',
-                      _taBeforeController,
-                      '120/80',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'TA Après (MMHG)',
-                      _taAfterController,
-                      '120/80',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Row 2: FC Before | FC After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'FC Avant (BPM)',
-                      _fcBeforeController,
-                      '72',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'FC Après (BPM)',
-                      _fcAfterController,
-                      '72',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Row 3: FR Before | FR After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'FR Avant (RES/MIN)',
-                      _frBeforeController,
-                      '16',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'FR Après (RES/MIN)',
-                      _frAfterController,
-                      '16',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Row 4: Temp Before | Temp After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'Temp Avant (°C)',
-                      _temperatureBeforeController,
-                      '37',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'Temp Après (°C)',
-                      _temperatureAfterController,
-                      '37',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Row 5: Glucose Before | Glucose After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'Glucose Avant',
-                      _glucoseBeforeController,
-                      '',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'Glucose Après',
-                      _glucoseAfterController,
-                      '',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Row 6: SpO2 Before | SpO2 After
-              Row(
-                children: [
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'SpO2 Avant (%)',
-                      _spo2BeforeController,
-                      '98',
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildVitalSignField(
-                      'SpO2 Après (%)',
-                      _spo2AfterController,
-                      '98',
-                    ),
-                  ),
-                ],
-              ),
+              _buildVitalSignsBeforeSection(),
               const SizedBox(height: 24),
             ],
 
             // Conditional Content Based on Report Type
             if (_reportType == 'simple_transport') ...[
               // Medical History
-              _buildSectionHeader('💊 Antécédents Médicaux'),
+              _buildSectionHeader('Antecedents Medicaux'),
               const SizedBox(height: 12),
               _buildDynamicMedicalHistoryGroup(),
               const SizedBox(height: 24),
 
               // Patient Needs
-              _buildSectionHeader('🏥 Besoins du Patient'),
+              _buildSectionHeader('Besoins du Patient'),
               const SizedBox(height: 12),
-              _buildDynamicPatientNeedsGroup(),
+              _buildDynamicPatientNeedsGroupSecure(),
+              const SizedBox(height: 24),
+
+              _buildSectionHeader('Medicaments administres'),
+              const SizedBox(height: 12),
+              _buildMedicationsSection(),
+              const SizedBox(height: 24),
+            ],
+
+            if (_reportType != 'deceased') ...[
+              _buildSectionHeader('Signes Vitaux Apres'),
+              const SizedBox(height: 12),
+              _buildVitalSignsAfterSection(),
               const SizedBox(height: 24),
             ],
 
@@ -1305,6 +1409,7 @@ class _MissionTechnicalSheetScreenState
                 },
               ),
             const SizedBox(height: 24),
+
 
             // Submit Button
             SizedBox(
@@ -1364,6 +1469,126 @@ class _MissionTechnicalSheetScreenState
         ),
       ),
     );
+  }
+
+  List<Map<String, String>> _buildMedicationsPayload() {
+    final medications = <Map<String, String>>[];
+    for (final medication in medicationControllers) {
+      final name = medication['name']?.text.trim() ?? '';
+      final dosage = medication['dosage']?.text.trim() ?? '';
+      final frequency = medication['frequency']?.text.trim() ?? '';
+
+      if (name.isEmpty && dosage.isEmpty && frequency.isEmpty) {
+        continue;
+      }
+
+      medications.add({
+        'name': name,
+        'dosage': dosage,
+        'frequency': frequency,
+      });
+    }
+    return medications;
+  }
+
+  Widget _buildMedicationsSection() {
+    return Column(
+      children: [
+        ...medicationControllers.asMap().entries.map((entry) {
+          final index = entry.key;
+          final medication = entry.value;
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Medicament ${index + 1}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          setState(() {
+                            for (final controller in medication.values) {
+                              controller.dispose();
+                            }
+                            medicationControllers.removeAt(index);
+                          });
+                        },
+                        icon: const Icon(Icons.delete, color: Colors.red),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _buildTextField(
+                    'Nom',
+                    medication['name']!,
+                    'Nom du medicament',
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildTextField(
+                          'Dosage',
+                          medication['dosage']!,
+                          'ex: 500 mg',
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildTextField(
+                          'Frequence',
+                          medication['frequency']!,
+                          'ex: 2x / jour',
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: ElevatedButton.icon(
+            onPressed: _addMedication,
+            icon: const Icon(Icons.add),
+            label: const Text('Ajouter un medicament'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _addMedication() {
+    setState(() {
+      medicationControllers.add({
+        'name': TextEditingController(),
+        'dosage': TextEditingController(),
+        'frequency': TextEditingController(),
+      });
+    });
   }
 
   Widget _buildSectionHeader(String title) {
@@ -1493,7 +1718,7 @@ class _MissionTechnicalSheetScreenState
   String _formatLabel(String key) {
     switch (key) {
       case 'oxygen':
-        return 'Oxygène';
+        return 'Oxygene';
       case 'perfusion':
         return 'Perfusion';
       case 'monitorage':
@@ -1555,7 +1780,7 @@ class _MissionTechnicalSheetScreenState
         ElevatedButton.icon(
           onPressed: _showAddMedicalHistoryDialog,
           icon: const Icon(Icons.add),
-          label: const Text('Ajouter un antécédent'),
+          label: const Text('Ajouter un antecedent'),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.blue,
             foregroundColor: Colors.white,
@@ -1601,7 +1826,7 @@ class _MissionTechnicalSheetScreenState
                           Expanded(
                             flex: 2,
                             child: Text(
-                              '  • $nestedOption',
+                              '  - $nestedOption',
                               style: const TextStyle(fontSize: 14),
                             ),
                           ),
@@ -1683,7 +1908,7 @@ class _MissionTechnicalSheetScreenState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '  • $nestedOption',
+                            '  - $nestedOption',
                             style: const TextStyle(fontSize: 14),
                           ),
                           const SizedBox(height: 6),
@@ -1693,9 +1918,9 @@ class _MissionTechnicalSheetScreenState
                                 flex: 1,
                                 child: TextFormField(
                                   controller: qtyController,
-                                  keyboardType: TextInputType.number,
+                                  keyboardType: TextInputType.text,
                                   decoration: InputDecoration(
-                                    labelText: 'Qté',
+                                    labelText: 'Qte',
                                     // hintText removed
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(8),
@@ -1713,7 +1938,7 @@ class _MissionTechnicalSheetScreenState
                                 child: TextFormField(
                                   controller: timeController,
                                   decoration: InputDecoration(
-                                    labelText: 'Durée',
+                                    labelText: 'Duree',
                                     // hintText removed
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(8),
@@ -1830,17 +2055,455 @@ class _MissionTechnicalSheetScreenState
     );
   }
 
-  // Dialog to add medical history
+  Widget _buildDynamicPatientNeedsGroupSecure() {
+    final toggleNames = {'Monitorage', 'Pansement', 'Immobilisation'};
+
+    Widget buildToggle(String needName, TextEditingController controller) {
+      final isEnabled = patientNeedsToggleState[needName] ?? true;
+      return Row(
+        children: [
+          Expanded(
+            child: Text(needName, style: const TextStyle(fontSize: 16)),
+          ),
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      patientNeedsToggleState[needName] = true;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: isEnabled ? Colors.green : Colors.grey[300],
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(7),
+                        bottomLeft: Radius.circular(7),
+                      ),
+                    ),
+                    child: Text(
+                      'Oui',
+                      style: TextStyle(
+                        color: isEnabled ? Colors.white : Colors.black54,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+                InkWell(
+                  onTap: () {
+                    setState(() {
+                      patientNeedsToggleState[needName] = false;
+                      controller.text = '0';
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: !isEnabled ? Colors.red : Colors.grey[300],
+                      borderRadius: const BorderRadius.only(
+                        topRight: Radius.circular(7),
+                        bottomRight: Radius.circular(7),
+                      ),
+                    ),
+                    child: Text(
+                      'Non',
+                      style: TextStyle(
+                        color: !isEnabled ? Colors.white : Colors.black54,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        ...defaultPatientNeedsOptions.map((option) {
+          final needName = option.$1;
+          final needId = option.$2;
+
+          if (needId == 'vni' || needId == 'vc') {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    needName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ...nestedPatientNeedsOptions[needId]!.map((nestedOption) {
+                    final controller = nestedQuantities[needId]![nestedOption]!;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              '  - $nestedOption',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextFormField(
+                              controller: controller,
+                              keyboardType: TextInputType.number,
+                              decoration: InputDecoration(
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 12,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          }
+
+          if (needId == 'pse') {
+            final parentController =
+                patientNeedsState[needName] ?? TextEditingController(text: '0');
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 2,
+                        child: Text(
+                          needName,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextFormField(
+                          controller: parentController,
+                          keyboardType: TextInputType.number,
+                          decoration: InputDecoration(
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ...nestedPatientNeedsOptions[needId]!.map((nestedOption) {
+                    final controller = nestedQuantities[needId]![nestedOption]!;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '  - $nestedOption',
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                          const SizedBox(height: 6),
+                          TextFormField(
+                            controller: controller,
+                            keyboardType: TextInputType.text,
+                            decoration: InputDecoration(
+                              labelText: 'Vitesse',
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            );
+          }
+
+          final controller =
+              patientNeedsState[needName] ?? TextEditingController(text: '0');
+          final hasToggle = toggleNames.contains(needName);
+          final isPerfusion = needName == 'Perfusion';
+          final isEnabled = patientNeedsToggleState[needName] ?? true;
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                hasToggle
+                    ? buildToggle(needName, controller)
+                    : Text(needName, style: const TextStyle(fontSize: 16)),
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: controller,
+                  enabled: !hasToggle || isEnabled,
+                  keyboardType:
+                      isPerfusion ? TextInputType.text : TextInputType.number,
+                  decoration: InputDecoration(
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 12,
+                    ),
+                    filled: hasToggle && !isEnabled,
+                    fillColor: hasToggle && !isEnabled ? Colors.grey[200] : null,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }),
+        ...customPatientNeedsItems.asMap().entries.map((entry) {
+          final index = entry.key;
+          final needName = entry.value;
+          final controller =
+              patientNeedsState[needName] ?? TextEditingController(text: '0');
+          final isTextInput = needName == 'Perfusion';
+
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: Text(needName, style: const TextStyle(fontSize: 16)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextFormField(
+                    controller: controller,
+                    keyboardType:
+                        isTextInput ? TextInputType.text : TextInputType.number,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.delete, color: Colors.red),
+                  onPressed: () {
+                    setState(() {
+                      customPatientNeedsItems.removeAt(index);
+                      patientNeedsState.remove(needName);
+                      patientNeedsToggleState.remove(needName);
+                    });
+                  },
+                ),
+              ],
+            ),
+          );
+        }),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: _showAddPatientNeedDialog,
+          icon: const Icon(Icons.add),
+          label: const Text('Ajouter un besoin'),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.blue,
+            foregroundColor: Colors.white,
+          ),
+        ),
+      ],
+    );
+  }
+  Widget _buildVitalSignsBeforeSection() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'TA Avant (MMHG)',
+                _taBeforeController,
+                '120/80',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'FC Avant (BPM)',
+                _fcBeforeController,
+                '72',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'FR Avant (RES/MIN)',
+                _frBeforeController,
+                '16',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'Temp Avant (C)',
+                _temperatureBeforeController,
+                '37',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'Glucose Avant',
+                _glucoseBeforeController,
+                '',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'SpO2 Avant (%)',
+                _spo2BeforeController,
+                '98',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVitalSignsAfterSection() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'TA Apres (MMHG)',
+                _taAfterController,
+                '120/80',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'FC Apres (BPM)',
+                _fcAfterController,
+                '72',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'FR Apres (RES/MIN)',
+                _frAfterController,
+                '16',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'Temp Apres (C)',
+                _temperatureAfterController,
+                '37',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildVitalSignField(
+                'Glucose Apres',
+                _glucoseAfterController,
+                '',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildVitalSignField(
+                'SpO2 Apres (%)',
+                _spo2AfterController,
+                '98',
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   void _showAddMedicalHistoryDialog() {
-    TextEditingController controller = TextEditingController();
+    final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Ajouter un antécédent'),
+        title: const Text('Ajouter un antecedent'),
         content: TextFormField(
           controller: controller,
           decoration: InputDecoration(
-            // hintText removed
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           ),
         ),
@@ -1857,7 +2520,6 @@ class _MissionTechnicalSheetScreenState
                   if (!customMedicalHistoryItems.contains(itemName)) {
                     customMedicalHistoryItems.add(itemName);
                   }
-                  // Initialize as checked when adding
                   medicalHistoryChecked[itemName] = true;
                 });
                 Navigator.pop(context);
@@ -1870,10 +2532,9 @@ class _MissionTechnicalSheetScreenState
     );
   }
 
-  // Dialog to add patient need
   void _showAddPatientNeedDialog() {
-    TextEditingController nameController = TextEditingController();
-    TextEditingController quantityController = TextEditingController(text: '0');
+    final nameController = TextEditingController();
+    final quantityController = TextEditingController(text: '0');
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
@@ -1884,10 +2545,7 @@ class _MissionTechnicalSheetScreenState
             TextFormField(
               controller: nameController,
               decoration: InputDecoration(
-                // hintText removed
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
             const SizedBox(height: 12),
@@ -1895,10 +2553,7 @@ class _MissionTechnicalSheetScreenState
               controller: quantityController,
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
-                // hintText removed
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
           ],
@@ -1912,17 +2567,12 @@ class _MissionTechnicalSheetScreenState
             onPressed: () {
               if (nameController.text.isNotEmpty) {
                 final itemName = nameController.text;
-                final quantity = quantityController.text.isEmpty
-                    ? '0'
-                    : quantityController.text;
+                final quantity = quantityController.text.isEmpty ? '0' : quantityController.text;
                 setState(() {
                   if (!customPatientNeedsItems.contains(itemName)) {
                     customPatientNeedsItems.add(itemName);
                   }
-                  // Initialize/update quantity
-                  patientNeedsState[itemName] = TextEditingController(
-                    text: quantity,
-                  );
+                  patientNeedsState[itemName] = TextEditingController(text: quantity);
                 });
                 Navigator.pop(context);
               }
@@ -1936,8 +2586,8 @@ class _MissionTechnicalSheetScreenState
 
   Future<void> _loadCustomMotifTransportOptions() async {
     final prefs = await SharedPreferences.getInstance();
-    final customOptions =
-        prefs.getStringList('custom_motif_transport_options') ?? [];
+    final customOptions = prefs.getStringList('custom_motif_transport_options') ?? [];
+    if (!mounted) return;
     setState(() {
       customMotifTransportOptions = customOptions;
     });
@@ -1945,10 +2595,7 @@ class _MissionTechnicalSheetScreenState
 
   Future<void> _saveCustomMotifTransportOptions() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(
-      'custom_motif_transport_options',
-      customMotifTransportOptions,
-    );
+    await prefs.setStringList('custom_motif_transport_options', customMotifTransportOptions);
   }
 
   Widget _buildMotifTransportDropdown() {
@@ -1967,12 +2614,12 @@ class _MissionTechnicalSheetScreenState
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           value: _selectedMotifTransport,
-          hint: const Text('Sélectionner un motif'),
+          hint: const Text('Selectionner un motif'),
           items: allOptions
-              .map(
-                (option) =>
-                    DropdownMenuItem(value: option, child: Text(option)),
-              )
+              .map((option) => DropdownMenuItem<String>(
+                    value: option,
+                    child: Text(option),
+                  ))
               .toList(),
           onChanged: (value) {
             if (value == 'autre') {
@@ -1984,10 +2631,8 @@ class _MissionTechnicalSheetScreenState
             }
           },
           decoration: InputDecoration(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 10,
-            ),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
             prefixIcon: const Icon(Icons.local_hospital),
           ),
@@ -1996,12 +2641,13 @@ class _MissionTechnicalSheetScreenState
     );
   }
 
+
   void _showAddCustomMotifDialog() {
     final controller = TextEditingController();
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Ajouter un motif personnalisé'),
+        title: const Text('Ajouter un motif personnalise'),
         content: TextField(
           controller: controller,
           decoration: const InputDecoration(
@@ -2035,3 +2681,6 @@ class _MissionTechnicalSheetScreenState
     );
   }
 }
+
+
+

@@ -1,4 +1,4 @@
-enum Environment { development, production }
+﻿enum Environment { development, production }
 
 bool _isAllowedDevelopmentHttpUrl(String value) {
   return value.startsWith('http://127.0.0.1') ||
@@ -25,7 +25,7 @@ String _validateEndpointUrl(String value, {required bool allowDevelopmentHttp}) 
 }
 
 class EnvironmentConfig {
-  static const Environment currentEnvironment = Environment.development;
+  static const Environment currentEnvironment = Environment.production;
 
   static String get notificationBackendUrl {
     switch (currentEnvironment) {
@@ -36,7 +36,7 @@ class EnvironmentConfig {
         );
       case Environment.production:
         return _validateEndpointUrl(
-          'https://ambulance-notification-server-new.onrender.com',
+          'https://notification-server-test.onrender.com',
           allowDevelopmentHttp: false,
         );
     }
@@ -51,3 +51,4 @@ class EnvironmentConfig {
     }
   }
 }
+

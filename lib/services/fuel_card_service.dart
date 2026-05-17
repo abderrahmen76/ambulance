@@ -164,10 +164,14 @@ class FuelCardService {
         return 0.0;
       }
 
+      final fuelCardEntries = response.map((entry) {
+        return FuelCard.fromJson(entry);
+      }).toList()
+        ..sort(_compareFuelCardsChronologically);
+
       // Calculate balance: refills ADD, consumptions SUBTRACT
       double balance = 0.0;
-      for (final entry in response) {
-        final fuelCard = FuelCard.fromJson(entry);
+      for (final fuelCard in fuelCardEntries) {
         if (fuelCard.driverName.toLowerCase() == 'refill') {
           // Refill: ADD to balance
           balance += fuelCard.soldesPaid;
@@ -187,6 +191,36 @@ class FuelCardService {
       print('[FuelCardService] getCurrentCardBalance() ERROR: $e');
       rethrow;
     }
+  }
+
+  int _compareFuelCardsChronologically(FuelCard a, FuelCard b) {
+    final dateComparison = _compareFuelCardDates(a.date, b.date);
+    if (dateComparison != 0) {
+      return dateComparison;
+    }
+    return _compareFuelCardIds(a.id, b.id);
+  }
+
+  int _compareFuelCardDates(String a, String b) {
+    final parsedA = DateTime.tryParse(a);
+    final parsedB = DateTime.tryParse(b);
+
+    if (parsedA != null && parsedB != null) {
+      return parsedA.compareTo(parsedB);
+    }
+
+    return a.compareTo(b);
+  }
+
+  int _compareFuelCardIds(String a, String b) {
+    final numericA = int.tryParse(a);
+    final numericB = int.tryParse(b);
+
+    if (numericA != null && numericB != null) {
+      return numericA.compareTo(numericB);
+    }
+
+    return a.compareTo(b);
   }
 
   /// Refill fuel card with new amount

@@ -1584,6 +1584,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     String ambulanceId,
     String ambulanceName,
   ) {
+    final remainingById = _buildFuelCardRemainingById(fuelCards);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1767,17 +1769,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       .toList();
                   final card = filteredCards[index];
                   final isEven = index.isEven;
-
-                  // Calculate solde restant by summing all refills and subtracting consumptions up to this point
-                  double calculatedBalance = 0.0;
-                  for (final entry in fuelCards) {
-                    if (entry.driverName.toLowerCase() == 'refill') {
-                      calculatedBalance += entry.soldesPaid;
-                    } else {
-                      calculatedBalance -= entry.soldesPaid;
-                    }
-                    if (entry.id == card.id) break; // Stop at current card
-                  }
+                  final calculatedBalance = remainingById[card.id] ?? 0.0;
 
                   return Container(
                     color: isEven ? Colors.grey[50] : Colors.white,
@@ -1865,6 +1857,53 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ],
     );
+  }
+
+  Map<String, double> _buildFuelCardRemainingById(List<FuelCard> fuelCards) {
+    final chronologicalCards = List<FuelCard>.from(fuelCards)
+      ..sort((a, b) {
+        final dateComparison = _compareFuelCardDates(a.date, b.date);
+        if (dateComparison != 0) {
+          return dateComparison;
+        }
+        return _compareFuelCardIds(a.id, b.id);
+      });
+
+    double runningBalance = 0.0;
+    final remainingById = <String, double>{};
+
+    for (final card in chronologicalCards) {
+      if (card.driverName.toLowerCase() == 'refill') {
+        runningBalance += card.soldesPaid;
+      } else {
+        runningBalance -= card.soldesPaid;
+      }
+      remainingById[card.id] = runningBalance;
+    }
+
+    return remainingById;
+  }
+
+  int _compareFuelCardDates(String a, String b) {
+    final parsedA = DateTime.tryParse(a);
+    final parsedB = DateTime.tryParse(b);
+
+    if (parsedA != null && parsedB != null) {
+      return parsedA.compareTo(parsedB);
+    }
+
+    return a.compareTo(b);
+  }
+
+  int _compareFuelCardIds(String a, String b) {
+    final numericA = int.tryParse(a);
+    final numericB = int.tryParse(b);
+
+    if (numericA != null && numericB != null) {
+      return numericA.compareTo(numericB);
+    }
+
+    return a.compareTo(b);
   }
 
   Widget _buildMaintenanceSection(

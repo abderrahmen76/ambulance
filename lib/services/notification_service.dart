@@ -12,6 +12,7 @@ import 'dart:io';
 import '../config/constants.dart';
 import 'location_request_service.dart';
 import 'notification_app_service.dart';
+import 'jwt_helper.dart';
 
 String _safeNotificationType(RemoteMessage message) =>
     (message.data['type'] ?? 'unknown').toString();
@@ -23,11 +24,48 @@ Map<String, dynamic> _minimalNotificationData(Map<String, dynamic> data) {
         entry.key == 'mission_number' ||
         entry.key == 'type' ||
         entry.key == 'new_status' ||
-        entry.key == 'priority') {
+        entry.key == 'priority' ||
+        entry.key == 'tenant_id' ||
+        entry.key == 'tenantId' ||
+        entry.key == 'provider_tenant_id' ||
+        entry.key == 'clinic_tenant_id') {
       safe[entry.key] = entry.value;
     }
   }
   return safe;
+}
+
+String? _extractTenantIdFromData(Map<String, dynamic> data) {
+  for (final key in const [
+    'tenant_id',
+    'tenantId',
+    'provider_tenant_id',
+    'clinic_tenant_id',
+  ]) {
+    final value = data[key]?.toString().trim() ?? '';
+    if (value.isNotEmpty) {
+      return value;
+    }
+  }
+
+  final nestedData = data['data'];
+  if (nestedData is String && nestedData.isNotEmpty) {
+    try {
+      final parsed = jsonDecode(nestedData);
+      if (parsed is Map<String, dynamic>) {
+        return _extractTenantIdFromData(parsed);
+      }
+      if (parsed is Map) {
+        return _extractTenantIdFromData(
+          parsed.map((key, value) => MapEntry(key.toString(), value)),
+        );
+      }
+    } catch (_) {
+      // Ignore malformed nested data.
+    }
+  }
+
+  return null;
 }
 
 /// Global background notification handler
@@ -42,6 +80,11 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     debugPrint('[FCM] Background LOCATION_REQUEST detected, starting one-shot location response');
     await LocationRequestService.instance.ensureBackgroundReady();
     await LocationRequestService.instance.handleLocationRequest(message.data);
+  }
+
+  if (!await NotificationService.instance._shouldDisplayNotification(message.data)) {
+    debugPrint('[FCM] Background notification skipped due to tenant mismatch');
+    return;
   }
 
   // Show local notification when app is in background
@@ -109,24 +152,38 @@ class NotificationService {
           });
         }
 
-        _showLocalNotification(message);
+        _shouldDisplayNotification(message.data).then((shouldDisplay) {
+          if (!shouldDisplay) {
+            debugPrint('[FCM] Foreground notification skipped due to tenant mismatch');
+            return;
+          }
+          _showLocalNotification(message);
+        });
       });
 
       // Handle notification tap when app is terminated
       FirebaseMessaging.instance
           .getInitialMessage()
-          .then((RemoteMessage? message) {
+          .then((RemoteMessage? message) async {
         if (message != null) {
           debugPrint(
               '[FCM] App opened from terminated state: ${message.messageId}');
+          if (!await _shouldDisplayNotification(message.data)) {
+            debugPrint('[FCM] Terminated-state notification tap ignored due to tenant mismatch');
+            return;
+          }
           _handleNotificationTap(message.data);
         }
       });
 
       // Handle notification tap when app is in background
-      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) async {
         debugPrint(
             '[FCM] Notification tapped from background: ${message.messageId}');
+        if (!await _shouldDisplayNotification(message.data)) {
+          debugPrint('[FCM] Background notification tap ignored due to tenant mismatch');
+          return;
+        }
         _handleNotificationTap(message.data);
       });
 
@@ -434,6 +491,35 @@ class NotificationService {
       await _saveNotification(message);
     } catch (e) {
       debugPrint('[NotificationService] Error showing local notification: $e');
+    }
+  }
+
+  Future<bool> _shouldDisplayNotification(Map<String, dynamic> data) async {
+    final messageTenantId = _extractTenantIdFromData(data)?.trim() ?? '';
+    if (messageTenantId.isEmpty) {
+      return true;
+    }
+
+    try {
+      final currentTenantId = (await JWTHelper.getTenantId())?.trim() ?? '';
+      if (currentTenantId.isEmpty) {
+        debugPrint(
+          '[NotificationService] Current tenant unavailable; suppressing tenant-scoped notification',
+        );
+        return false;
+      }
+
+      if (currentTenantId != messageTenantId) {
+        debugPrint(
+          '[NotificationService] Tenant mismatch; suppressing notification target=$messageTenantId current=$currentTenantId',
+        );
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      debugPrint('[NotificationService] Failed to validate notification tenant: $e');
+      return false;
     }
   }
 

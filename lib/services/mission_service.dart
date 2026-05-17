@@ -992,6 +992,7 @@ class MissionService {
   }) async {
     try {
       final requestId = DateTime.now().millisecondsSinceEpoch;
+      final tenantId = await _getCurrentTenantId();
 
       print('═══════════════════════════════════════════════════');
       print(
@@ -1046,22 +1047,23 @@ class MissionService {
         'body': '$patientName - $fromLocation → $toLocation',
         'missionNumber': missionNumber,
         'priority': priority,
+        'tenantId': tenantId,
         'requestId': requestId,
         'data': {
           'type': 'mission_created',
           'missionNumber': missionNumber,
           'priority': priority,
+          'tenantId': tenantId,
           'requestId': requestId.toString(),
         },
       };
 
       print('Payload prepared (fields redacted)');
 
-      final response = await http
-          .post(
-        Uri.parse(notificationUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(payload),
+      final response = await Supabase.instance.client.functions
+          .invoke(
+        'secure_tenant_notifications',
+        body: payload,
       )
           .timeout(
         const Duration(seconds: 30),
@@ -1072,19 +1074,18 @@ class MissionService {
         },
       );
 
-      print(
-          'Response Status Code: ${response.statusCode} [REQUEST #$requestId]');
-      print('Response Body: ${response.body}');
+      print('Response Status Code: ${response.status} [REQUEST #$requestId]');
+      print('Response Data: ${response.data}');
 
-      if (response.statusCode == 200) {
+      if (response.status == 200) {
         print(
             '✅ [MissionService] Mission notification sent successfully [REQUEST #$requestId]');
-        print('Response: ${response.body}');
+        print('Response: ${response.data}');
       } else {
         print(
             '❌ [MissionService] Failed to send notification [REQUEST #$requestId]');
-        print('Status: ${response.statusCode}');
-        print('Error: ${response.body}');
+        print('Status: ${response.status}');
+        print('Error: ${response.data}');
       }
     } catch (e) {
       print('═══════════════════════════════════════════════════');
@@ -1102,6 +1103,7 @@ class MissionService {
     try {
       final backendUrl = SupabaseConfig.notificationBackendUrl;
       final notificationUrl = '$backendUrl/send-notification-all';
+      final tenantId = await _getCurrentTenantId();
 
       debugPrint('═══════════════════════════════════════════════════');
       debugPrint('📢 SENDING MISSION ASSIGNED NOTIFICATION');
@@ -1113,20 +1115,21 @@ class MissionService {
         'title': '✅ Mission Acceptée',
         'body': 'Le chauffeur $driverName a accepté la mission',
         'missionId': missionId,
+        'tenantId': tenantId,
         'data': {
           'type': 'mission_assigned',
           'missionId': missionId,
           'driverName': driverName,
+          'tenantId': tenantId,
         },
       };
 
       debugPrint('Payload prepared for mission-assigned notification');
 
-      final response = await http
-          .post(
-        Uri.parse(notificationUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(payload),
+      final response = await Supabase.instance.client.functions
+          .invoke(
+        'secure_tenant_notifications',
+        body: payload,
       )
           .timeout(
         const Duration(seconds: 30),
@@ -1137,7 +1140,7 @@ class MissionService {
         },
       );
 
-      if (response.statusCode == 200) {
+      if (response.status == 200) {
         debugPrint(
             '✅ [MissionService] Mission assigned notification sent successfully');
       } else {
@@ -1163,6 +1166,7 @@ class MissionService {
 
       final backendUrl = SupabaseConfig.notificationBackendUrl;
       final notificationUrl = '$backendUrl/send-notification-all';
+      final tenantId = await _getCurrentTenantId();
 
       // Determine title and emoji based on status
       String title;
@@ -1197,20 +1201,21 @@ class MissionService {
         'title': title,
         'body': body,
         'missionId': missionId,
+        'tenantId': tenantId,
         'data': {
           'type': 'mission_status_update',
           'missionId': missionId,
           'status': newStatus,
+          'tenantId': tenantId,
         },
       };
 
       print('   Payload prepared for status update notification');
 
-      final response = await http
-          .post(
-        Uri.parse(notificationUrl),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode(payload),
+      final response = await Supabase.instance.client.functions
+          .invoke(
+        'secure_tenant_notifications',
+        body: payload,
       )
           .timeout(
         const Duration(seconds: 30),
@@ -1221,7 +1226,7 @@ class MissionService {
         },
       );
 
-      if (response.statusCode == 200) {
+      if (response.status == 200) {
         debugPrint(
             '✅ [MissionService] Mission status update notification sent successfully');
       } else {

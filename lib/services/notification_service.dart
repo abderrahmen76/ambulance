@@ -3,12 +3,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'dart:io';
 import '../config/constants.dart';
 import 'location_request_service.dart';
 import 'notification_app_service.dart';
@@ -270,6 +266,13 @@ class NotificationService {
             .catchError((e) => debugPrint(
                 '[NotificationService] Updates v2 channel deletion: $e'));
 
+        await _localNotifications
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.deleteNotificationChannel('ambulance_channel_v3')
+            .catchError((e) =>
+                debugPrint('[NotificationService] V3 channel deletion: $e'));
+
         debugPrint(
             '[NotificationService] ðŸ§¹ Cleaned up old notification channels');
 
@@ -282,12 +285,12 @@ class NotificationService {
                 AndroidFlutterLocalNotificationsPlugin>()
             ?.createNotificationChannel(
               AndroidNotificationChannel(
-                'ambulance_channel_v3',
+                'ambulance_channel_v4',
                 'Ambulance Notifications',
                 description: 'All ambulance notifications with custom sound',
                 importance: Importance.max,
                 playSound: true,
-                sound: RawResourceAndroidNotificationSound('mission_alert'),
+                sound: RawResourceAndroidNotificationSound('ambulance_alert'),
                 enableVibration: true,
                 showBadge: true,
               ),
@@ -412,7 +415,7 @@ class NotificationService {
       });
 
       // Use single channel for ALL notification types
-      const channelId = 'ambulance_channel_v3';
+      const channelId = 'ambulance_channel_v4';
       debugPrint(
           '[NotificationService] ðŸ“¢ Using channel: $channelId (for $notificationType)');
 
@@ -421,16 +424,16 @@ class NotificationService {
 
       // Build Android notification sound based on availability
       AndroidNotificationSound androidSound;
-      if (soundPath != 'mission_alert') {
+      if (soundPath != 'ambulance_alert') {
         // Using cached file from Supabase
         debugPrint('[NotificationService] ðŸŽµ Using CACHED sound: $soundPath');
         androidSound = UriAndroidNotificationSound(soundPath);
       } else {
         // Using built-in resource
         debugPrint(
-            '[NotificationService] ðŸŽµ Using BUILT-IN sound: mission_alert');
+            '[NotificationService] ðŸŽµ Using BUILT-IN sound: ambulance_alert');
         androidSound =
-            const RawResourceAndroidNotificationSound('mission_alert');
+            const RawResourceAndroidNotificationSound('ambulance_alert');
       }
 
       // Build Android notification details with runtime values
@@ -475,7 +478,7 @@ class NotificationService {
       debugPrint(
           '[NotificationService] ðŸ“¤ About to display notification with custom sound');
       debugPrint(
-          '[NotificationService] ðŸ“‹ Channel: $channelId | Sound: mission_alert.mp3');
+          '[NotificationService] ðŸ“‹ Channel: $channelId | Sound: ambulance_alert.mp3');
 
       await _localNotifications.show(
         message.hashCode,
@@ -633,146 +636,16 @@ class NotificationService {
     return 'unknown';
   }
 
-  // ========== SOUND CACHING METHODS ==========
-  static const String SOUND_CACHE_DIR = 'notification_sounds';
-  static const String SOUND_VERSION_KEY = 'mission_alert_version';
-  static const String SOUND_URL_KEY = 'mission_alert_url';
-
-  /// Download and cache notification sound from Supabase on app startup
-  /// Call this once during app initialization
+  /// Keep the notification sound fixed to the APK-bundled Android raw resource.
   Future<void> preloadNotificationSounds() async {
-    try {
-      debugPrint('[NotificationService] ðŸ”„ Starting sound preload...');
-
-      // Get preferences and config
-      final prefs = await SharedPreferences.getInstance();
-      final cachedVersion = prefs.getInt(SOUND_VERSION_KEY) ?? 0;
-
-      // Fetch current sound config from backend
-      final configVersion = await _fetchSoundConfigVersion();
-
-      if (configVersion == null) {
-        debugPrint(
-            '[NotificationService] âš ï¸  Could not fetch sound config - using built-in fallback');
-        return;
-      }
-
-      debugPrint(
-          '[NotificationService] Version check - Cached: $cachedVersion, Available: $configVersion');
-
-      // Only download if version changed
-      if (cachedVersion < configVersion) {
-        await _downloadAndCacheSound(prefs, configVersion);
-      } else {
-        debugPrint(
-            '[NotificationService] âœ… Sound is up-to-date (v$cachedVersion)');
-      }
-    } catch (e) {
-      debugPrint('[NotificationService] âš ï¸  Error preloading sound: $e');
-      // Continue anyway - will fall back to built-in sound
-    }
+    debugPrint(
+        '[NotificationService] Using APK-bundled ambulance_alert sound; remote sound preload skipped.');
   }
 
-  /// Fetch latest sound configuration version and URL from backend
-  Future<int?> _fetchSoundConfigVersion() async {
-    try {
-      // Replace with your actual backend URL
-      const String configUrl =
-          'https://ambulance-notification-server-new.onrender.com/api/notification-config';
-
-      final response = await http
-          .get(Uri.parse(configUrl))
-          .timeout(const Duration(seconds: 15));
-
-      if (response.statusCode == 200) {
-        final config = jsonDecode(response.body);
-        final version = config['version'] as int?;
-        final url = config['url'] as String?;
-
-        if (version != null) {
-          // Store URL for later use
-          final prefs = await SharedPreferences.getInstance();
-          if (url != null) {
-            await prefs.setString(SOUND_URL_KEY, url);
-          }
-          return version;
-        }
-      }
-    } catch (e) {
-      debugPrint('[NotificationService] âš ï¸  Error fetching config: $e');
-    }
-    return null;
-  }
-
-  /// Download sound from URL and cache locally
-  Future<void> _downloadAndCacheSound(
-      SharedPreferences prefs, int version) async {
-    try {
-      debugPrint(
-          '[NotificationService] ðŸ“¥ Downloading mission_alert.mp3 v$version...');
-
-      // Get sound URL from prefs (set by _fetchSoundConfigVersion)
-      final soundUrl = prefs.getString(SOUND_URL_KEY);
-      if (soundUrl == null) {
-        debugPrint('[NotificationService] âš ï¸  No sound URL available');
-        return;
-      }
-
-      // Download file
-      final response = await http
-          .get(Uri.parse(soundUrl))
-          .timeout(const Duration(seconds: 30));
-
-      if (response.statusCode == 200) {
-        // Get cache directory
-        final appDir = await getApplicationDocumentsDirectory();
-        final soundDir = Directory('${appDir.path}/$SOUND_CACHE_DIR');
-
-        // Create directory if needed
-        if (!await soundDir.exists()) {
-          await soundDir.create(recursive: true);
-          debugPrint(
-              '[NotificationService] ðŸ“ Created cache directory: ${soundDir.path}');
-        }
-
-        // Write file
-        final file = File('${soundDir.path}/mission_alert.mp3');
-        await file.writeAsBytes(response.bodyBytes);
-
-        // Update version
-        await prefs.setInt(SOUND_VERSION_KEY, version);
-
-        debugPrint(
-            '[NotificationService] âœ… Sound cached successfully (${response.bodyBytes.length} bytes)');
-      } else {
-        debugPrint(
-            '[NotificationService] âš ï¸  Download failed: ${response.statusCode}');
-      }
-    } catch (e) {
-      debugPrint('[NotificationService] âš ï¸  Error downloading sound: $e');
-    }
-  }
-
-  /// Get notification sound path - cached local file or built-in fallback
-  /// Returns "mission_alert" for built-in, or file path for cached sound
+  /// Returns the Android raw resource name used by the notification channel.
   Future<String> getNotificationSoundPath() async {
-    try {
-      final appDir = await getApplicationDocumentsDirectory();
-      final soundFile =
-          File('${appDir.path}/$SOUND_CACHE_DIR/mission_alert.mp3');
-
-      if (await soundFile.exists()) {
-        debugPrint(
-            '[NotificationService] ðŸŽµ Using cached sound: ${soundFile.path}');
-        return soundFile.path;
-      }
-    } catch (e) {
-      debugPrint('[NotificationService] Error getting sound path: $e');
-    }
-
-    // Fallback to built-in
-    debugPrint('[NotificationService] ðŸŽµ Using built-in sound: mission_alert');
-    return 'mission_alert';
+    debugPrint('[NotificationService] ðŸŽµ Using built-in sound: ambulance_alert');
+    return 'ambulance_alert';
   }
 }
 

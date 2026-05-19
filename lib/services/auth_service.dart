@@ -231,7 +231,7 @@ class AuthService {
 
           // Delete this device's FCM token from database using filters
           await _apiClient.deleteWithFilters(
-            'user_fcm_tokens',
+            '/rest/v1/user_fcm_tokens',
             {
               'user_id': 'eq.$userId',
               'fcm_token': 'eq.$fcmToken',

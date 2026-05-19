@@ -961,6 +961,7 @@ class MissionService {
           '[MissionService] 🚀 QUEUING BACKGROUND NOTIFICATION for $missionNumber');
       unawaited(
         _notifyAllUsersMissionCreated(
+          missionId: baseMission.id,
           missionNumber: missionNumber,
           patientName: '$patientFirstName $patientLastName'.trim(),
           priority: priority,
@@ -984,6 +985,7 @@ class MissionService {
 
   /// Send notification to all users about a new mission
   Future<void> _notifyAllUsersMissionCreated({
+    required String missionId,
     required String missionNumber,
     required String patientName,
     required String priority,
@@ -1045,12 +1047,14 @@ class MissionService {
       final payload = {
         'title': '$priorityEmoji Nouvelle Mission: $missionNumber',
         'body': '$patientName - $fromLocation → $toLocation',
+        'missionId': missionId,
         'missionNumber': missionNumber,
         'priority': priority,
         'tenantId': tenantId,
         'requestId': requestId,
         'data': {
           'type': 'mission_created',
+          'mission_id': missionId,
           'missionNumber': missionNumber,
           'priority': priority,
           'tenantId': tenantId,
@@ -1092,6 +1096,43 @@ class MissionService {
       print('❌ [MissionService] ERROR sending notification: $e');
       print('═══════════════════════════════════════════════════');
       // Don't fail mission creation if notification fails
+    }
+  }
+
+  int _notificationDeliveredCount(dynamic responseData) {
+    if (responseData is! Map) {
+      return 0;
+    }
+
+    final gateway = responseData['gateway'];
+    final delivered = gateway is Map ? gateway['delivered'] : null;
+    if (delivered is int) {
+      return delivered;
+    }
+    if (delivered is num) {
+      return delivered.toInt();
+    }
+
+    final targetCount = responseData['target_count'];
+    if (targetCount is int) {
+      return targetCount;
+    }
+    if (targetCount is num) {
+      return targetCount.toInt();
+    }
+
+    return 0;
+  }
+
+  void _logNotificationFunctionResponse(String label, dynamic response) {
+    final responseData = response.data;
+    final delivered = _notificationDeliveredCount(responseData);
+    debugPrint('[MissionService] $label response status: ${response.status}');
+    debugPrint('[MissionService] $label response data: $responseData');
+
+    if (response.status == 200 && delivered <= 0) {
+      debugPrint(
+          '[MissionService] WARNING: $label returned 200 but delivered 0 notification(s)');
     }
   }
 
@@ -1139,6 +1180,8 @@ class MissionService {
           throw Exception('Notification request timeout');
         },
       );
+
+      _logNotificationFunctionResponse('mission_assigned', response);
 
       if (response.status == 200) {
         debugPrint(
@@ -1225,6 +1268,8 @@ class MissionService {
           throw Exception('Notification request timeout');
         },
       );
+
+      _logNotificationFunctionResponse('mission_status_update', response);
 
       if (response.status == 200) {
         debugPrint(

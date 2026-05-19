@@ -9,6 +9,7 @@ import '../models/ambulance_model.dart';
 import '../models/maintenance_record_model.dart';
 import '../models/fuel_card_model.dart';
 import '../services/api_client.dart';
+import '../services/mission_service.dart';
 import '../services/pdf_service.dart';
 import '../config/constants.dart';
 import '../utils/responsive.dart';
@@ -28,6 +29,7 @@ class _ManagerHistoriqueScreenContentState
     extends State<ManagerHistoriqueScreenContent>
     with WidgetsBindingObserver {
   final _apiClient = ApiClient();
+  final _missionService = MissionService();
   late Future<List<Mission>> _missionsFuture;
   late Future<List<Ambulance>> _ambulancesFuture;
   late Future<List<MaintenanceRecord>> _maintenanceRecordsFuture;
@@ -237,7 +239,6 @@ class _ManagerHistoriqueScreenContentState
     return missions.where((mission) {
       try {
         final missionDate = DateTime.parse(mission.missionDate);
-
         // Filter by date range (inclusive on both ends)
         if (_startDate != null && missionDate.isBefore(_startDate!)) {
           return false;
@@ -1407,7 +1408,6 @@ class _ManagerHistoriqueScreenContentState
     final statusColor = _getStatusColor(mission.status);
     final statusText = _translateStatus(mission.status);
     final missionDate = DateTime.parse(mission.missionDate);
-
     // Minimized card: only mission number, date, status, and locations
     return InkWell(
       onTap: () => _showMissionDetailsDialog(mission),
@@ -1487,11 +1487,17 @@ class _ManagerHistoriqueScreenContentState
     );
   }
 
-  void _showMissionDetailsDialog(Mission mission) {
-    final responsive = context.responsive;
+  Future<void> _showMissionDetailsDialog(Mission mission) async {
+    final enrichedMission = await _loadMissionForDetails(mission);
+    if (!mounted) return;
+    mission = enrichedMission;
     final statusColor = _getStatusColor(mission.status);
     final statusText = _translateStatus(mission.status);
     final missionDate = DateTime.parse(mission.missionDate);
+    final patientName = _missionPatientName(mission);
+    final patientPhone = _missionPatientPhone(mission);
+    final patientAge = _missionPatientAge(mission);
+    final ambulanceLabel = _missionAmbulanceLabel(mission);
     showDialog(
       context: context,
       builder: (context) {
@@ -1545,12 +1551,12 @@ class _ManagerHistoriqueScreenContentState
                   'Date:  ${DateFormat('dd/MM/yyyy HH:mm').format(missionDate)}',
                 ),
                 const SizedBox(height: 8),
-                Text('Ambulance: ${mission.ambulanceId}'),
+                Text('Ambulance: $ambulanceLabel'),
                 Text('Conducteur: ${mission.driverName ?? 'N/A'}'),
-                Text(
-                  'Patient: ${(mission.patientFirstName ?? '') + ' ' + (mission.patientLastName ?? '')}',
-                ),
-                Text('Priorité: ${mission.priority ?? 'N/A'}'),
+                Text('Patient: ${patientName.isEmpty ? 'N/A' : patientName}'),
+                if (patientAge.isNotEmpty) Text('Age: $patientAge'),
+                if (patientPhone.isNotEmpty) Text('Telephone: $patientPhone'),
+                Text('Priorite: ${mission.priority}'),
                 Text('De: ${mission.fromLocation}'),
                 Text('À: ${mission.toLocation}'),
                 if (mission.missionPrice != null)
@@ -1559,12 +1565,20 @@ class _ManagerHistoriqueScreenContentState
                   Text(
                     'Paiement: ${_getPaymentTypeLabel(mission.paymentType!)}',
                   ),
-                if (mission.status != null) Text('Statut: $statusText'),
+                Text('Statut: $statusText'),
                 // Add more fields as needed
               ],
             ),
           ),
           actions: [
+            TextButton.icon(
+              onPressed: () {
+                Navigator.of(context).pop();
+                _showEditMissionDialog(mission);
+              },
+              icon: const Icon(Icons.edit, size: 18),
+              label: const Text('Modifier'),
+            ),
             if (mission.status.toLowerCase() != 'pending') ...[
               TextButton(
                 onPressed: () async {
@@ -1641,6 +1655,422 @@ class _ManagerHistoriqueScreenContentState
         );
       },
     );
+  }
+
+  Future<Mission> _loadMissionForDetails(Mission mission) async {
+    try {
+      return await _missionService.getMissionById(mission.id) ?? mission;
+    } catch (e) {
+      debugPrint(
+        '[ManagerHistoriqueScreen] private mission details unavailable: $e',
+      );
+      return mission;
+    }
+  }
+
+  String _firstNonEmpty(List<Object?> values) {
+    for (final value in values) {
+      final text = value?.toString().trim() ?? '';
+      if (text.isNotEmpty && text.toLowerCase() != 'null') {
+        return text;
+      }
+    }
+    return '';
+  }
+
+  String _missionAmbulanceLabel(Mission mission) {
+    final label = _ambulanceLabel(mission.ambulanceId);
+    if (label != mission.ambulanceId) return label;
+    return _firstNonEmpty([
+      mission.requestedAmbulanceNumber,
+      mission.requirements?['ambulance_number'],
+      mission.requirements?['ambulanceNumber'],
+      mission.ambulanceId,
+    ]);
+  }
+
+  String _missionPatientName(Mission mission) {
+    final fullName = [
+      mission.patientFirstName,
+      mission.patientLastName,
+    ].where((part) => part != null && part.trim().isNotEmpty).join(' ').trim();
+    return _firstNonEmpty([
+      fullName,
+      mission.patientName,
+      mission.patientRequestDetails['patient_name'],
+      mission.patientRequestDetails['patientName'],
+      mission.requirements?['patient_name'],
+      mission.requirements?['patientName'],
+    ]);
+  }
+
+  String _missionPatientPhone(Mission mission) {
+    return _firstNonEmpty([
+      mission.patientPhone,
+      mission.patientRequestDetails['patient_phone'],
+      mission.patientRequestDetails['patientPhone'],
+      mission.patientRequestDetails['phone'],
+      mission.requirements?['patient_phone'],
+      mission.requirements?['patientPhone'],
+      mission.requirements?['phone'],
+    ]);
+  }
+
+  String _missionPatientAge(Mission mission) {
+    return _firstNonEmpty([
+      mission.patientAge,
+      mission.patientRequestDetails['patient_age'],
+      mission.patientRequestDetails['patientAge'],
+      mission.patientRequestDetails['age'],
+      mission.requirements?['patient_age'],
+      mission.requirements?['patientAge'],
+      mission.requirements?['age'],
+    ]);
+  }
+
+  Future<void> _showEditMissionDialog(Mission mission) async {
+    final formKey = GlobalKey<FormState>();
+    final fromCtrl = TextEditingController(text: mission.fromLocation);
+    final toCtrl = TextEditingController(text: mission.toLocation);
+    final patientNameCtrl = TextEditingController(
+      text: _missionPatientName(mission),
+    );
+    final patientAgeCtrl = TextEditingController(
+      text: _missionPatientAge(mission),
+    );
+    final patientPhoneCtrl = TextEditingController(
+      text: _missionPatientPhone(mission),
+    );
+    final driverNameCtrl = TextEditingController(
+      text: mission.driverName ?? '',
+    );
+    final infirmierNameCtrl = TextEditingController(
+      text: mission.infirmierName ?? '',
+    );
+    final notesCtrl = TextEditingController(text: mission.notes ?? '');
+    final priceCtrl = TextEditingController(text: mission.missionPrice ?? '');
+    final guaranteeCtrl = TextEditingController(text: mission.guarantee ?? '');
+    var selectedPriority =
+        LocationData.priorityOptions.contains(mission.priority)
+        ? mission.priority
+        : LocationData.priorityOptions.first;
+    var selectedPaymentType = _paymentTypes.contains(mission.paymentType)
+        ? mission.paymentType!
+        : _paymentTypes.first;
+    var selectedIsPaid = mission.isPaid ?? false;
+    var isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          InputDecoration decoration(String label, {String? hint}) =>
+              InputDecoration(
+                labelText: label,
+                hintText: hint,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+              );
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            title: Text('Modifier ${mission.missionNumber}'),
+            content: SingleChildScrollView(
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextFormField(
+                      controller: fromCtrl,
+                      enabled: !isSaving,
+                      decoration: decoration('Lieu de départ'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: toCtrl,
+                      enabled: !isSaving,
+                      decoration: decoration('Lieu de destination'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: patientNameCtrl,
+                      enabled: !isSaving,
+                      decoration: decoration('Nom du patient'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: patientAgeCtrl,
+                      enabled: !isSaving,
+                      keyboardType: TextInputType.number,
+                      decoration: decoration('Age du patient'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: patientPhoneCtrl,
+                      enabled: !isSaving,
+                      keyboardType: TextInputType.phone,
+                      decoration: decoration('Téléphone du patient'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: driverNameCtrl,
+                      enabled: !isSaving,
+                      decoration: decoration('Ambulancier / Conducteur'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: infirmierNameCtrl,
+                      enabled: !isSaving,
+                      decoration: decoration('Infirmier / Médecin'),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedPriority,
+                      decoration: decoration('Priorité / Motif'),
+                      items: LocationData.priorityOptions
+                          .map(
+                            (priority) => DropdownMenuItem(
+                              value: priority,
+                              child: Text(
+                                LocationData.getPriorityDisplayName(priority),
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: isSaving
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setDialogState(() => selectedPriority = value);
+                              }
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: priceCtrl,
+                      enabled: !isSaving,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: decoration(
+                        'Tarif',
+                        hint: 'Montant en dinars',
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      value: selectedPaymentType,
+                      decoration: decoration('Type de paiement'),
+                      items: _paymentTypes
+                          .map(
+                            (paymentType) => DropdownMenuItem(
+                              value: paymentType,
+                              child: Text(_getPaymentTypeLabel(paymentType)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: isSaving
+                          ? null
+                          : (value) {
+                              if (value != null) {
+                                setDialogState(
+                                  () => selectedPaymentType = value,
+                                );
+                              }
+                            },
+                    ),
+                    if (selectedPaymentType == 'charge') ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: guaranteeCtrl,
+                        enabled: !isSaving,
+                        maxLines: 2,
+                        decoration: decoration(
+                          'Garantie',
+                          hint: 'Ex: clinique, société, carte, accord...',
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    CheckboxListTile(
+                      value: selectedIsPaid,
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Mission payée'),
+                      controlAffinity: ListTileControlAffinity.leading,
+                      onChanged: isSaving
+                          ? null
+                          : (value) {
+                              setDialogState(
+                                () => selectedIsPaid = value ?? false,
+                              );
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: notesCtrl,
+                      enabled: !isSaving,
+                      maxLines: 3,
+                      decoration: decoration('Notes'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSaving ? null : () => Navigator.pop(dialogContext),
+                child: const Text('Annuler'),
+              ),
+              ElevatedButton.icon(
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (!(formKey.currentState?.validate() ?? false)) {
+                          return;
+                        }
+                        setDialogState(() => isSaving = true);
+                        try {
+                          await _saveManagerMissionEdits(
+                            mission: mission,
+                            fromLocation: fromCtrl.text,
+                            toLocation: toCtrl.text,
+                            patientName: patientNameCtrl.text,
+                            patientAge: patientAgeCtrl.text,
+                            patientPhone: patientPhoneCtrl.text,
+                            driverName: driverNameCtrl.text,
+                            infirmierName: infirmierNameCtrl.text,
+                            priority: selectedPriority,
+                            price: priceCtrl.text,
+                            paymentType: selectedPaymentType,
+                            guarantee: guaranteeCtrl.text,
+                            isPaid: selectedIsPaid,
+                            notes: notesCtrl.text,
+                          );
+                          if (mounted) {
+                            Navigator.pop(dialogContext);
+                            setState(_reloadHistoriqueData);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Mission mise à jour avec succès',
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          }
+                        } catch (_) {
+                          if (mounted) {
+                            setDialogState(() => isSaving = false);
+                          }
+                        }
+                      },
+                icon: isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
+                label: Text(isSaving ? 'Enregistrement...' : 'Enregistrer'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _saveManagerMissionEdits({
+    required Mission mission,
+    required String fromLocation,
+    required String toLocation,
+    required String patientName,
+    required String patientAge,
+    required String patientPhone,
+    required String driverName,
+    required String infirmierName,
+    required String priority,
+    required String price,
+    required String paymentType,
+    required String guarantee,
+    required bool isPaid,
+    required String notes,
+  }) async {
+    try {
+      final normalizedPatientName = patientName.trim();
+      final patientNameParts = normalizedPatientName
+          .split(RegExp(r'\s+'))
+          .where((part) => part.trim().isNotEmpty)
+          .toList();
+      final patientFirstName = patientNameParts.isEmpty
+          ? null
+          : patientNameParts.first;
+      final patientLastName = patientNameParts.length > 1
+          ? patientNameParts.skip(1).join(' ')
+          : null;
+      final normalizedPatientAge = patientAge.trim();
+      final normalizedPriceText = price.trim().replaceAll(',', '.');
+      final normalizedPrice = normalizedPriceText.isEmpty
+          ? null
+          : num.tryParse(normalizedPriceText);
+
+      final trimmedFromLocation = fromLocation.trim();
+      final trimmedToLocation = toLocation.trim();
+      final trimmedGuarantee = guarantee.trim();
+      final Map<String, dynamic> updatePayload = {
+        'from_location': trimmedFromLocation,
+        'pickup_address': trimmedFromLocation,
+        'to_location': trimmedToLocation,
+        'destination_address': trimmedToLocation,
+        'patient_name': normalizedPatientName.isEmpty
+            ? null
+            : normalizedPatientName,
+        'patient_first_name': patientFirstName,
+        'patient_last_name': patientLastName,
+        'patient_age': normalizedPatientAge.isEmpty
+            ? null
+            : int.tryParse(normalizedPatientAge) ?? normalizedPatientAge,
+        'patient_phone': patientPhone.trim().isEmpty
+            ? null
+            : patientPhone.trim(),
+        'driver_name': driverName.trim().isEmpty ? null : driverName.trim(),
+        'infirmier_name': infirmierName.trim().isEmpty
+            ? null
+            : infirmierName.trim(),
+        'priority': priority.trim().isEmpty ? 'normal' : priority.trim(),
+        'mission_price': normalizedPrice,
+        'payment_type': paymentType,
+        'payment_status': isPaid,
+        'guarantee': paymentType == 'charge' && trimmedGuarantee.isNotEmpty
+            ? trimmedGuarantee
+            : null,
+        'notes': notes.trim().isEmpty ? null : notes.trim(),
+      };
+
+      await _apiClient.patch(
+        '${SupabaseConfig.missionsTable}?id=eq.${mission.id}',
+        updatePayload,
+      );
+    } catch (e) {
+      if (!mounted) {
+        rethrow;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Erreur lors de la mise à jour: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      rethrow;
+    }
   }
 
   Widget _buildDetailItem(String label, String value, IconData icon) {

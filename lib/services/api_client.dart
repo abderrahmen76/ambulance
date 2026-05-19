@@ -445,7 +445,6 @@ class ApiClient {
             'action': 'register',
             'fcm_token': body['fcm_token'],
             'device_name': body['device_name'],
-            'device_type': body['device_type'],
           },
         );
         return Map<String, dynamic>.from(

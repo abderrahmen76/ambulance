@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/responsive.dart';
@@ -16,6 +18,9 @@ import '../services/mission_service.dart';
 import '../services/auth_service.dart';
 import '../services/company_staff_service.dart';
 import '../services/notification_service.dart';
+import '../services/performance_log_service.dart';
+import '../services/realtime_event_bus_service.dart';
+import '../services/resume_refresh_service.dart';
 import '../services/scheduled_shift_runtime_service.dart';
 import '../widgets/clinic_dropdown_field.dart';
 import '../widgets/patient_request_summary_card.dart';
@@ -81,14 +86,20 @@ class _DashboardScreenState extends State<DashboardScreen>
       'https://ambulance-backend-1-n6wd.onrender.com';
 
   late Future<Map<String, dynamic>> _dashboardData;
+  static const _tabStaleTimeout = Duration(minutes: 3);
   int _selectedTabIndex = 0;
+  final Set<int> _visitedTabs = {0};
   bool _isAmbulanceActionInProgress = false;
   List<User> _companyStaff = [];
+  DateTime? _lastDashboardLoadedAt;
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _dashboardData = _loadDashboardData();
     _loadCompanyStaff();
 
@@ -105,6 +116,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             if (mounted) {
               setState(() {
                 _selectedTabIndex = 1; // Switch to Missions tab
+                _visitedTabs.add(1);
               });
             }
           }
@@ -113,23 +125,60 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void dispose() {
+    _realtimeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+      return;
+    }
+
     if (state == AppLifecycleState.resumed) {
-      // Refresh dashboard data when app comes back to foreground
-      if (mounted) {
+      final resumeEvent = ResumeRefreshService.buildResumeEvent(
+        scope: 'driver',
+        activeTabIndex: _selectedTabIndex,
+      );
+      final resumeTrace = PerformanceLog.start(
+        'app resume -> dashboard ready',
+        meta: {
+          'screen': 'driver_dashboard',
+          'tab': _selectedTabIndex,
+          'backgrounded_ms': resumeEvent.backgroundedFor.inMilliseconds,
+          'immediate': resumeEvent.shouldRefreshVisibleImmediately,
+        },
+      );
+      if (!mounted) {
+        resumeTrace.end(meta: {'skipped': 'unmounted'});
+        return;
+      }
+
+      if (resumeEvent.shouldRefreshVisibleImmediately) {
         setState(() {
-          _dashboardData = _loadDashboardData();
+          _dashboardData = _loadDashboardData(parentTrace: resumeTrace);
+        });
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          resumeTrace.end(meta: {'used_cached_data': true});
         });
       }
     }
   }
 
-  Future<Map<String, dynamic>> _loadDashboardData() async {
+  Future<Map<String, dynamic>> _loadDashboardData({
+    PerfTrace? parentTrace,
+    bool forceRefresh = false,
+  }) async {
+    final trace = parentTrace ??
+        PerformanceLog.start(
+          'dashboard load',
+          meta: {'screen': 'driver_dashboard', 'tab': _selectedTabIndex},
+        );
     try {
       // Clear ambulance cache to fetch fresh data
       _ambulanceService.clearCache();
@@ -138,6 +187,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       final ambulance = await _ambulanceService.getAmbulanceForDriver(
         widget.user.id!,
         tenantId: widget.user.tenantId,
+      );
+      trace.checkpoint(
+        'driver_ambulance_fetch_done',
+        meta: {'has_ambulance': ambulance != null},
       );
 
       // Fetch missions if we have an ambulance
@@ -160,11 +213,23 @@ class _DashboardScreenState extends State<DashboardScreen>
         final ambulanceId = ambulance.id!;
         final missions = await _missionService.getAvailableMissions(
           ambulanceId,
+          forceRefresh: forceRefresh,
+        );
+        trace.checkpoint(
+          'available_missions_fetch_done',
+          meta: {'count': missions.length},
         );
         availableMissions = missions;
 
         // Fetch active missions
-        activeMissions = await _missionService.getActiveMissions(ambulanceId);
+        activeMissions = await _missionService.getActiveMissions(
+          ambulanceId,
+          forceRefresh: forceRefresh,
+        );
+        trace.checkpoint(
+          'active_missions_fetch_done',
+          meta: {'count': activeMissions.length},
+        );
 
         // Fetch fuel history
         fuelHistory = await _fuelCardService.getFuelCardHistory(ambulanceId);
@@ -184,9 +249,13 @@ class _DashboardScreenState extends State<DashboardScreen>
               driverId: widget.user.id,
               tenantId: widget.user.tenantId!,
             );
+        trace.checkpoint(
+          'ambulances_fetch_done',
+          meta: {'count': availableAmbulances.length},
+        );
       }
 
-      return {
+      final data = {
         'ambulance': ambulance,
         'missions': availableMissions,
         'activeMissions': activeMissions,
@@ -195,7 +264,19 @@ class _DashboardScreenState extends State<DashboardScreen>
         'maintenanceRules': maintenanceRules,
         'availableAmbulances': availableAmbulances,
       };
+      _lastDashboardLoadedAt = DateTime.now();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        trace.end(
+          meta: {
+            'available': availableMissions.length,
+            'active': activeMissions.length,
+            'ambulances': availableAmbulances.length,
+          },
+        );
+      });
+      return data;
     } catch (e) {
+      trace.end(meta: {'error': e.runtimeType});
       rethrow;
     }
   }
@@ -222,8 +303,23 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _refreshDashboardData() async {
     if (!mounted) return;
     setState(() {
-      _dashboardData = _loadDashboardData();
+      _dashboardData = _loadDashboardData(forceRefresh: true);
     });
+  }
+
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case RealtimeEventType.missionInserted:
+      case RealtimeEventType.missionUpdated:
+      case RealtimeEventType.missionDeleted:
+      case RealtimeEventType.missionRefreshRequested:
+      case RealtimeEventType.ambulanceUpdated:
+        setState(() {
+          _dashboardData = _loadDashboardData(forceRefresh: true);
+        });
+        break;
+    }
   }
 
   Future<void> _linkAmbulance(Ambulance ambulance) async {
@@ -301,6 +397,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       await _ambulanceService.releaseAmbulanceFromDriver(
         ambulanceId: ambulance.id,
         driverId: widget.user.id,
+        tenantId: widget.user.tenantId,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -387,119 +484,89 @@ class _DashboardScreenState extends State<DashboardScreen>
           final availableAmbulances =
               (data['availableAmbulances'] ?? []) as List<Ambulance>;
 
-          // Show different screen based on selected tab
-          Widget tabContent;
-          switch (_selectedTabIndex) {
-            case 0:
-              // Dashboard tab
-              tabContent = ambulance == null
-                  ? _buildAmbulanceSelectionState(context, availableAmbulances)
-                  : SingleChildScrollView(
-                      padding: EdgeInsets.all(
-                        context.responsive.paddingValueLarge,
+          final ambulanceRequiredTab = ambulance == null
+              ? _buildAmbulanceSelectionState(context, availableAmbulances)
+              : null;
+          final dashboardTab = ambulanceRequiredTab ??
+              SingleChildScrollView(
+                padding: EdgeInsets.all(context.responsive.paddingValueLarge),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildAmbulanceHeader(
+                      context,
+                      ambulance!,
+                      onRelease: _isAmbulanceActionInProgress
+                          ? null
+                          : () => _releaseAmbulance(ambulance!),
+                    ),
+                    const SizedBox(height: 24),
+                    _buildMissionsSection(
+                      context,
+                      missions,
+                      activeMissions.isNotEmpty,
+                    ),
+                    const SizedBox(height: 24),
+                    _buildQuickInfoCards(context, ambulance!),
+                    const SizedBox(height: 24),
+                    if (fuelHistory.isNotEmpty) ...[
+                      _buildFuelHistorySection(
+                        context,
+                        fuelHistory,
+                        ambulance!.id!,
+                        ambulance!.ambulanceNumber,
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildAmbulanceHeader(
-                            context,
-                            ambulance,
-                            onRelease: _isAmbulanceActionInProgress
-                                ? null
-                                : () => _releaseAmbulance(ambulance),
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Available Missions Section
-                          _buildMissionsSection(
-                            context,
-                            missions,
-                            activeMissions.isNotEmpty,
-                          ),
-                          const SizedBox(height: 24),
-
-                          // Quick Info Cards
-                          _buildQuickInfoCards(context, ambulance),
-                          const SizedBox(height: 24),
-
-                          // Fuel Card History
-                          if (fuelHistory.isNotEmpty) ...[
-                            _buildFuelHistorySection(
-                              context,
-                              fuelHistory,
-                              ambulance.id!,
-                              ambulance.ambulanceNumber,
-                            ),
-                            const SizedBox(height: 24),
-                          ] else ...[
-                            _buildEmptyFuelCardSection(
-                              context,
-                              ambulance.id!,
-                              ambulance.ambulanceNumber,
-                            ),
-                            const SizedBox(height: 24),
-                          ],
-
-                          // Maintenance Records
-                          _buildMaintenanceSection(
-                            context,
-                            maintenanceRecords,
-                            ambulance,
-                            maintenanceRules,
-                          ),
-                          const SizedBox(height: 24),
-                        ],
+                      const SizedBox(height: 24),
+                    ] else ...[
+                      _buildEmptyFuelCardSection(
+                        context,
+                        ambulance!.id!,
+                        ambulance!.ambulanceNumber,
                       ),
-                    );
-              break;
-            case 1:
-              // Missions tab
-              if (ambulance == null) {
-                tabContent = _buildAmbulanceSelectionState(
-                  context,
-                  availableAmbulances,
-                );
-              } else {
-                tabContent = ActiveMissionsScreen(
-                  user: widget.user,
-                  ambulanceId: ambulance.id!,
-                );
-              }
-              break;
-            case 2:
-              // Equipment Rental tab
-              if (ambulance == null) {
-                tabContent = _buildAmbulanceSelectionState(
-                  context,
-                  availableAmbulances,
-                );
-              } else {
-                tabContent = EquipmentRentalScreen(
-                  ambulance: ambulance,
-                  user: widget.user,
-                );
-              }
-              break;
-            case 3:
-              // Driver Tracking tab
-              if (ambulance == null) {
-                tabContent = _buildAmbulanceSelectionState(
-                  context,
-                  availableAmbulances,
-                );
-              } else {
-                tabContent = DriverTrackingScreen(
-                  user: widget.user,
-                  ambulanceId: ambulance.id!,
-                  ambulanceNumber: ambulance.ambulanceNumber ?? 'N/A',
-                );
-              }
-              break;
-            default:
-              tabContent = const Center(child: Text('Unknown Tab'));
-          }
+                      const SizedBox(height: 24),
+                    ],
+                    _buildMaintenanceSection(
+                      context,
+                      maintenanceRecords,
+                      ambulance!,
+                      maintenanceRules,
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+                ),
+              );
 
-          return tabContent;
+          return IndexedStack(
+            index: _selectedTabIndex,
+            children: [
+              dashboardTab,
+              !_visitedTabs.contains(1)
+                  ? const SizedBox.shrink()
+                  : ambulanceRequiredTab ??
+                  ActiveMissionsScreen(
+                    key: ValueKey('missions-${ambulance!.id}'),
+                    user: widget.user,
+                    ambulanceId: ambulance.id!,
+                  ),
+              !_visitedTabs.contains(2)
+                  ? const SizedBox.shrink()
+                  : ambulanceRequiredTab ??
+                  EquipmentRentalScreen(
+                    key: ValueKey('equipment-${ambulance!.id}'),
+                    ambulance: ambulance!,
+                    user: widget.user,
+                  ),
+              !_visitedTabs.contains(3)
+                  ? const SizedBox.shrink()
+                  : ambulanceRequiredTab ??
+                  DriverTrackingScreen(
+                    key: ValueKey('tracking-${ambulance!.id}'),
+                    user: widget.user,
+                    ambulanceId: ambulance.id!,
+                    ambulanceNumber: ambulance.ambulanceNumber ?? 'N/A',
+                  ),
+            ],
+          );
         },
       ),
       bottomNavigationBar: _buildBottomNavigation(context),
@@ -1584,8 +1651,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     String ambulanceId,
     String ambulanceName,
   ) {
-    final remainingById = _buildFuelCardRemainingById(fuelCards);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1729,17 +1794,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     Expanded(
                       child: Text(
-                        'Soldes Restant',
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.primary,
-                            ),
-                        textAlign: TextAlign.right,
-                      ),
-                    ),
-                    Expanded(
-                      child: Text(
                         'Kilométrage',
                         style: Theme.of(context).textTheme.labelMedium
                             ?.copyWith(
@@ -1752,103 +1806,89 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ],
                 ),
               ),
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: fuelCards
-                    .where((card) => card.driverName.toLowerCase() != 'refill')
-                    .take(5)
-                    .length,
-                separatorBuilder: (_, __) =>
-                    Divider(color: Colors.grey[150], height: 1),
-                itemBuilder: (context, index) {
-                  final filteredCards = fuelCards
-                      .where(
-                        (card) => card.driverName.toLowerCase() != 'refill',
-                      )
-                      .toList();
-                  final card = filteredCards[index];
-                  final isEven = index.isEven;
-                  final calculatedBalance = remainingById[card.id] ?? 0.0;
+              Builder(
+                builder: (context) {
+                  final visibleCards = fuelCards.take(5).toList();
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: visibleCards.length,
+                    separatorBuilder: (_, __) =>
+                        Divider(color: Colors.grey[150], height: 1),
+                    itemBuilder: (context, index) {
+                      final card = visibleCards[index];
+                      final isEven = index.isEven;
+                      final isRefill = _isFuelCardRefill(card);
 
-                  return Container(
-                    color: isEven ? Colors.grey[50] : Colors.white,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 14,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          flex: 2,
-                          child: Text(
-                            (card.date ?? '').split('T')[0].isEmpty
-                                ? 'N/A'
-                                : (card.date ?? '').split('T')[0],
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                          ),
+                      return Container(
+                        color: isRefill
+                            ? Colors.blue[50]
+                            : (isEven ? Colors.grey[50] : Colors.white),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 14,
                         ),
-                        Expanded(
-                          child: Text(
-                            card.driverName,
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w600,
-                                  color: Colors.green[700],
-                                ),
-                            textAlign: TextAlign.right,
-                          ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              flex: 2,
+                              child: Text(
+                                (card.date ?? '').split('T')[0].isEmpty
+                                    ? 'N/A'
+                                    : (card.date ?? '').split('T')[0],
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                _fuelCardDriverLabel(card),
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w600,
+                                      color: isRefill
+                                          ? Colors.blue[800]
+                                          : Colors.green[700],
+                                    ),
+                                textAlign: TextAlign.right,
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                '${card.soldesPaid} TND',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                                textAlign: TextAlign.right,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                card.kilometrage != null
+                                    ? '${card.kilometrage!.toStringAsFixed(1)} km'
+                                    : '-',
+                                style: Theme.of(context).textTheme.bodySmall
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.grey[700],
+                                    ),
+                                textAlign: TextAlign.right,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
                         ),
-                        Expanded(
-                          child: Text(
-                            '${card.soldesPaid} TND',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                            textAlign: TextAlign.right,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            '${calculatedBalance.toStringAsFixed(2)} TND',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: calculatedBalance >= 0
-                                      ? Colors.green[700]
-                                      : Colors.red[700],
-                                ),
-                            textAlign: TextAlign.right,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                        Expanded(
-                          child: Text(
-                            card.kilometrage != null
-                                ? '${card.kilometrage!.toStringAsFixed(1)} km'
-                                : '-',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(
-                                  fontWeight: FontWeight.w500,
-                                  color: Colors.grey[700],
-                                ),
-                            textAlign: TextAlign.right,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
+                      );
+                    },
                   );
                 },
               ),
@@ -1857,6 +1897,18 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ],
     );
+  }
+
+  bool get _isDashboardDataStale {
+    final loadedAt = _lastDashboardLoadedAt;
+    if (loadedAt == null) return true;
+    return DateTime.now().difference(loadedAt) >= _tabStaleTimeout;
+  }
+
+  void _refreshDashboardIfStale() {
+    if (_isDashboardDataStale) {
+      _refreshDashboardData();
+    }
   }
 
   Map<String, double> _buildFuelCardRemainingById(List<FuelCard> fuelCards) {
@@ -1883,6 +1935,12 @@ class _DashboardScreenState extends State<DashboardScreen>
 
     return remainingById;
   }
+
+  bool _isFuelCardRefill(FuelCard card) =>
+      card.driverName.trim().toLowerCase() == 'refill';
+
+  String _fuelCardDriverLabel(FuelCard card) =>
+      _isFuelCardRefill(card) ? 'Recharge' : card.driverName;
 
   int _compareFuelCardDates(String a, String b) {
     final parsedA = DateTime.tryParse(a);
@@ -2478,11 +2536,19 @@ class _DashboardScreenState extends State<DashboardScreen>
       ],
       onTap: (index) {
         if (mounted) {
+          final tabTrace = PerformanceLog.start(
+            'tab tap -> first frame',
+            meta: {'screen': 'driver_dashboard', 'from': _selectedTabIndex, 'to': index},
+          );
           setState(() {
             _selectedTabIndex = index;
-            if (index == 0) {
-              _dashboardData = _loadDashboardData();
-            }
+            _visitedTabs.add(index);
+          });
+          if (index == 0) {
+            _refreshDashboardIfStale();
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            tabTrace.end(meta: {'tab': index});
           });
         }
       },
@@ -2514,11 +2580,19 @@ class _DashboardScreenState extends State<DashboardScreen>
       ],
       onTap: (index) {
         if (mounted) {
+          final tabTrace = PerformanceLog.start(
+            'tab tap -> first frame',
+            meta: {'screen': 'driver_dashboard', 'from': _selectedTabIndex, 'to': index},
+          );
           setState(() {
             _selectedTabIndex = index;
-            if (index == 0) {
-              _dashboardData = _loadDashboardData();
-            }
+            _visitedTabs.add(index);
+          });
+          if (index == 0) {
+            _refreshDashboardIfStale();
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            tabTrace.end(meta: {'tab': index});
           });
         }
       },

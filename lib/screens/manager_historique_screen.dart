@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
@@ -9,8 +11,12 @@ import '../models/ambulance_model.dart';
 import '../models/maintenance_record_model.dart';
 import '../models/fuel_card_model.dart';
 import '../services/api_client.dart';
+import '../services/ambulance_service.dart';
+import '../services/app_memory_cache_service.dart';
 import '../services/mission_service.dart';
 import '../services/pdf_service.dart';
+import '../services/realtime_event_bus_service.dart';
+import '../services/resume_refresh_service.dart';
 import '../config/constants.dart';
 import '../utils/responsive.dart';
 
@@ -30,10 +36,12 @@ class _ManagerHistoriqueScreenContentState
     with WidgetsBindingObserver {
   final _apiClient = ApiClient();
   final _missionService = MissionService();
+  final _ambulanceService = AmbulanceService();
   late Future<List<Mission>> _missionsFuture;
   late Future<List<Ambulance>> _ambulancesFuture;
   late Future<List<MaintenanceRecord>> _maintenanceRecordsFuture;
   late Future<List<FuelCard>> _fuelCardsFuture;
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
 
   // Filter parameters
   DateTime? _startDate;
@@ -54,57 +62,95 @@ class _ManagerHistoriqueScreenContentState
   final List<String> _paymentTypes = ['cash', 'charge'];
   final List<String> _missionSources = ['manager', 'clinic', 'patient'];
 
+  bool get _canSeeMoneySections {
+    final role = widget.user.role?.trim().toLowerCase();
+    return role == 'owner' || role == 'admin' || role == 'super_admin';
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _reloadHistoriqueData();
 
     // 🔥 CRITICAL FIX: Reload after widget is fully built
     // This prevents lifecycle event race conditions when widget is recreated
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        debugPrint(
-          '[ManagerHistoriqueScreenContent] Post-frame callback: reloading historique data',
-        );
-        _reloadHistoriqueData();
-      }
-    });
   }
 
   @override
   void dispose() {
+    _realtimeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+    }
+  }
+
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 4) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
       debugPrint(
-        '[ManagerHistoriqueScreen] App resumed, reloading historique...',
+        '[ManagerHistoriqueScreen] Long resume, refreshing visible tab',
       );
-      _reloadHistoriqueData();
+      setState(_reloadHistoriqueData);
+    } else {
+      debugPrint('[ManagerHistoriqueScreen] Short resume, using cached data');
     }
   }
 
   void _reloadHistoriqueData() {
-    _missionsFuture = _getAllMissions();
+    _missionsFuture = _getAllMissions(forceRefresh: true);
     _ambulancesFuture = _getAllAmbulances();
     _maintenanceRecordsFuture = _getAllMaintenanceRecords();
     _fuelCardsFuture = _getAllFuelCards();
     _loadFilterData();
   }
 
-  Future<void> _loadFilterData() async {
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+    switch (event.type) {
+      case RealtimeEventType.missionInserted:
+      case RealtimeEventType.missionUpdated:
+      case RealtimeEventType.missionDeleted:
+      case RealtimeEventType.missionRefreshRequested:
+        setState(() {
+          _missionsFuture = _getAllMissions(forceRefresh: true);
+        });
+        _loadFilterData(forceRefresh: true);
+        break;
+      case RealtimeEventType.ambulanceUpdated:
+        setState(() {
+          _ambulancesFuture = _getAllAmbulances();
+        });
+        break;
+    }
+  }
+
+  Future<void> _loadFilterData({bool forceRefresh = false}) async {
     try {
       final ambulances = await _getAllAmbulances();
+      if (!mounted) return;
       setState(() {
         _ambulances = ambulances;
       });
 
-      final missions = await _getAllMissions();
+      final missions = await _getAllMissions(forceRefresh: forceRefresh);
       final drivers = missions.map((m) => m.driverName ?? 'N/A').toSet();
+      if (!mounted) return;
       setState(() {
         _drivers = drivers;
       });
@@ -113,10 +159,11 @@ class _ManagerHistoriqueScreenContentState
     }
   }
 
-  Future<List<Mission>> _getAllMissions() async {
+  Future<List<Mission>> _getAllMissions({bool forceRefresh = false}) async {
     try {
-      final response = await _apiClient.get(SupabaseConfig.missionsTable);
-      return response.map((json) => Mission.fromJson(json)).toList();
+      return await _missionService.getAllMissionsOperational(
+        forceRefresh: forceRefresh,
+      );
     } catch (e) {
       print('Error loading missions: $e');
       return [];
@@ -125,8 +172,7 @@ class _ManagerHistoriqueScreenContentState
 
   Future<List<Ambulance>> _getAllAmbulances() async {
     try {
-      final response = await _apiClient.get(SupabaseConfig.ambulancesTable);
-      return response.map((json) => Ambulance.fromJson(json)).toList();
+      return await _ambulanceService.getAllAmbulances();
     } catch (e) {
       print('Error loading ambulances: $e');
       return [];
@@ -1112,86 +1158,87 @@ class _ManagerHistoriqueScreenContentState
           ),
         ),
         SizedBox(height: responsive.spacingMedium),
-        _buildSoldePayeCard(
-          maintenanceTotal: maintenanceTotal,
-          fuelTotal: fuelTotal,
-          maintenanceCount: maintenanceRecords.length,
-          fuelCount: fuelCards.length,
-          isLoading: isFinanceLoading,
-          responsive: responsive,
-        ),
-        // Performance/Earnings section - always visible
-        SizedBox(height: responsive.spacingMedium),
-        Container(
-          padding: responsive.paddingMedium,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: responsive.radiusLarge,
-            border: Border.all(color: Colors.grey[200]!),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.05),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
+        if (_canSeeMoneySections) ...[
+          _buildSoldePayeCard(
+            maintenanceTotal: maintenanceTotal,
+            fuelTotal: fuelTotal,
+            maintenanceCount: maintenanceRecords.length,
+            fuelCount: fuelCards.length,
+            isLoading: isFinanceLoading,
+            responsive: responsive,
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'PERFORMANCE',
-                style: TextStyle(
-                  fontSize: responsive.fontSizeSmall,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.grey[700],
-                  letterSpacing: 0.5,
+          SizedBox(height: responsive.spacingMedium),
+          Container(
+            padding: responsive.paddingMedium,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: responsive.radiusLarge,
+              border: Border.all(color: Colors.grey[200]!),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
                 ),
-              ),
-              SizedBox(height: responsive.spacingMedium),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: responsive.spacingMedium,
-                mainAxisSpacing: responsive.spacingMedium,
-                childAspectRatio: 1.2,
-                children: [
-                  _buildPerformanceStat(
-                    'Revenus Total',
-                    '${totalEarnings.toStringAsFixed(2)} DT',
-                    Colors.green,
-                    Icons.attach_money,
-                    responsive,
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'PERFORMANCE',
+                  style: TextStyle(
+                    fontSize: responsive.fontSizeSmall,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[700],
+                    letterSpacing: 0.5,
                   ),
-                  _buildPerformanceStat(
-                    'Revenu Moyen',
-                    '${avgEarnings.toStringAsFixed(2)} DT',
-                    Colors.blue,
-                    Icons.trending_up,
-                    responsive,
-                  ),
-                  _buildPerformanceStat(
-                    'Missions Complétées',
-                    completedMissions.length.toString(),
-                    Colors.green,
-                    Icons.check_circle,
-                    responsive,
-                  ),
-                  _buildPerformanceStat(
-                    'Taux Complétude',
-                    missions.isNotEmpty
-                        ? '${((completedMissions.length / missions.length) * 100).toStringAsFixed(0)}%'
-                        : 'N/A',
-                    Colors.orange,
-                    Icons.percent,
-                    responsive,
-                  ),
-                ],
-              ),
-            ],
+                ),
+                SizedBox(height: responsive.spacingMedium),
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  crossAxisSpacing: responsive.spacingMedium,
+                  mainAxisSpacing: responsive.spacingMedium,
+                  childAspectRatio: 1.2,
+                  children: [
+                    _buildPerformanceStat(
+                      'Revenus Total',
+                      '${totalEarnings.toStringAsFixed(2)} DT',
+                      Colors.green,
+                      Icons.attach_money,
+                      responsive,
+                    ),
+                    _buildPerformanceStat(
+                      'Revenu Moyen',
+                      '${avgEarnings.toStringAsFixed(2)} DT',
+                      Colors.blue,
+                      Icons.trending_up,
+                      responsive,
+                    ),
+                    _buildPerformanceStat(
+                      'Missions Complétées',
+                      completedMissions.length.toString(),
+                      Colors.green,
+                      Icons.check_circle,
+                      responsive,
+                    ),
+                    _buildPerformanceStat(
+                      'Taux Complétude',
+                      missions.isNotEmpty
+                          ? '${((completedMissions.length / missions.length) * 100).toStringAsFixed(0)}%'
+                          : 'N/A',
+                      Colors.orange,
+                      Icons.percent,
+                      responsive,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ],
     );
   }
@@ -1488,9 +1535,15 @@ class _ManagerHistoriqueScreenContentState
   }
 
   Future<void> _showMissionDetailsDialog(Mission mission) async {
-    final enrichedMission = await _loadMissionForDetails(mission);
+    try {
+      mission = await _missionService.hydrateMissionWithPrivateData(mission);
+    } catch (e) {
+      debugPrint(
+        '[ManagerHistorique] Could not load private mission data for ${mission.id}: $e',
+      );
+    }
     if (!mounted) return;
-    mission = enrichedMission;
+
     final statusColor = _getStatusColor(mission.status);
     final statusText = _translateStatus(mission.status);
     final missionDate = DateTime.parse(mission.missionDate);
@@ -1655,17 +1708,6 @@ class _ManagerHistoriqueScreenContentState
         );
       },
     );
-  }
-
-  Future<Mission> _loadMissionForDetails(Mission mission) async {
-    try {
-      return await _missionService.getMissionById(mission.id) ?? mission;
-    } catch (e) {
-      debugPrint(
-        '[ManagerHistoriqueScreen] private mission details unavailable: $e',
-      );
-      return mission;
-    }
   }
 
   String _firstNonEmpty(List<Object?> values) {
@@ -2059,6 +2101,8 @@ class _ManagerHistoriqueScreenContentState
         '${SupabaseConfig.missionsTable}?id=eq.${mission.id}',
         updatePayload,
       );
+      MissionListCache.instance.clear();
+      MissionPhiMemoryCache.single.remove(mission.id);
     } catch (e) {
       if (!mounted) {
         rethrow;

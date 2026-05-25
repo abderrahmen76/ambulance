@@ -36,8 +36,8 @@ void main() async {
   _ensureHttpsUrl(SupabaseConfig.supabaseUrl);
   _ensureHttpsUrl(
     EnvironmentConfig.notificationBackendUrl,
-    allowDevelopmentHttp: EnvironmentConfig.currentEnvironment ==
-        Environment.development,
+    allowDevelopmentHttp:
+        EnvironmentConfig.currentEnvironment == Environment.development,
   );
 
   // Initialize Supabase (must be done before any auth operations)
@@ -63,7 +63,8 @@ void main() async {
       // Pre-download notification sound in background (doesn't block app startup)
       NotificationService.instance.preloadNotificationSounds().catchError((e) {
         debugPrint(
-            '[MAIN] ⚠️ Warning: Sound preload failed (will use built-in): $e');
+          '[MAIN] ⚠️ Warning: Sound preload failed (will use built-in): $e',
+        );
       });
 
       // Get and log FCM token for testing
@@ -128,7 +129,7 @@ class _MyAppState extends State<MyApp> {
             if (user.role == 'admin') {
               print('[DEBUG] Returning AdminDashboardScreen for admin user');
               return AdminDashboardScreen(user: user);
-            } else if (user.role == 'manager') {
+            } else if (user.role == 'manager' || user.role == 'owner') {
               print('[DEBUG] Returning ManagerEntryScreen for manager user');
               return ManagerEntryScreen(user: user);
             } else {
@@ -189,10 +190,7 @@ class _MyAppState extends State<MyApp> {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: AppColors.primary,
-            width: 2,
-          ),
+          borderSide: const BorderSide(color: AppColors.primary, width: 2),
         ),
         errorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
@@ -200,10 +198,7 @@ class _MyAppState extends State<MyApp> {
         ),
         focusedErrorBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(
-            color: AppColors.error,
-            width: 2,
-          ),
+          borderSide: const BorderSide(color: AppColors.error, width: 2),
         ),
       ),
 
@@ -212,10 +207,7 @@ class _MyAppState extends State<MyApp> {
         style: ElevatedButton.styleFrom(
           backgroundColor: AppColors.primary,
           foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 12,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -227,10 +219,7 @@ class _MyAppState extends State<MyApp> {
         style: OutlinedButton.styleFrom(
           foregroundColor: AppColors.primary,
           side: const BorderSide(color: AppColors.primary),
-          padding: const EdgeInsets.symmetric(
-            horizontal: 24,
-            vertical: 12,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -241,19 +230,14 @@ class _MyAppState extends State<MyApp> {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: AppColors.primary,
-          padding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 8,
-          ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         ),
       ),
 
       // Card Theme
       cardTheme: CardThemeData(
         elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         color: AppColors.surface,
       ),
 

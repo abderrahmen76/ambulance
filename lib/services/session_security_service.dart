@@ -33,6 +33,7 @@ class SessionSecurityService {
 
   Future<Session> ensureFreshSession({
     Duration minRemaining = const Duration(minutes: 5),
+    bool forceRefresh = false,
   }) async {
     final client = Supabase.instance.client;
     final session = client.auth.currentSession;
@@ -41,18 +42,20 @@ class SessionSecurityService {
     }
 
     final expiry = session.expiresAt;
-    if (expiry == null) {
+    if (!forceRefresh && expiry == null) {
       return session;
     }
 
-    final expiresAt = DateTime.fromMillisecondsSinceEpoch(
-      expiry * 1000,
-      isUtc: true,
-    );
-    final remaining = expiresAt.difference(DateTime.now().toUtc());
+    if (!forceRefresh && expiry != null) {
+      final expiresAt = DateTime.fromMillisecondsSinceEpoch(
+        expiry * 1000,
+        isUtc: true,
+      );
+      final remaining = expiresAt.difference(DateTime.now().toUtc());
 
-    if (remaining > minRemaining) {
-      return session;
+      if (remaining > minRemaining) {
+        return session;
+      }
     }
 
     final refreshResponse = await client.auth.refreshSession();
@@ -66,8 +69,9 @@ class SessionSecurityService {
 
   Future<Map<String, String>> buildFunctionHeaders({
     bool includeApiKey = true,
+    bool forceRefresh = false,
   }) async {
-    final session = await ensureFreshSession();
+    final session = await ensureFreshSession(forceRefresh: forceRefresh);
     final headers = <String, String>{
       'Authorization': 'Bearer ${session.accessToken}',
       'x-app-kind': _deviceIdentityService.appKind,

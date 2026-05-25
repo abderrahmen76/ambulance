@@ -166,13 +166,19 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
         final isoDate = parsedDate.toIso8601String();
 
         print('[AddFuelCard] Parsed date: ${_dateController.text} -> $isoDate');
+        final soldesPaid = double.tryParse(_soldesPaidController.text) ?? 0;
+        if (soldesPaid > _currentBalance) {
+          throw Exception(
+            'Solde insuffisant. Solde actuel: ${_currentBalance.toStringAsFixed(2)} TND',
+          );
+        }
 
         // Prepare data for API
         final fuelData = {
           'ambulance_id': widget.ambulanceId,
           'date': isoDate,
           'driver_name': _driverController.text,
-          'soldes_paid': double.tryParse(_soldesPaidController.text) ?? 0,
+          'soldes_paid': soldesPaid,
           'notes': _notesController.text,
           'user_id': widget.user.id,
           'kilometrage': double.tryParse(_kilometrageController.text) ?? 0,
@@ -391,7 +397,7 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
 
               // Soldes Paid field
               Text(
-                'Soldes (Payé) - TND',
+                'Solde payé - TND',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),
@@ -428,8 +434,13 @@ class _AddFuelCardScreenState extends State<AddFuelCardScreen> {
                   if (double.tryParse(value!) == null) {
                     return 'Montant invalide';
                   }
+                  final amount = double.tryParse(value) ?? 0;
+                  if (amount > _currentBalance) {
+                    return 'Solde insuffisant';
+                  }
                   return null;
                 },
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 20),
 

@@ -91,18 +91,14 @@ class _ManagerSignupScreenState extends State<ManagerSignupScreen> {
       labelText: label,
       prefixIcon: Icon(icon, color: AppColors.textSecondary),
       suffixIcon: suffix,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text("Creer ma societe"),
-      ),
+      appBar: AppBar(title: const Text("Creer ma societe")),
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -117,35 +113,32 @@ class _ManagerSignupScreenState extends State<ManagerSignupScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  "Creez votre societe, votre compte manager, puis ajoutez vos ambulances et chauffeurs.",
+                  "Creez votre societe, votre compte proprietaire, puis ajoutez vos ambulances, chauffeurs et managers.",
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const SizedBox(height: 24),
                 TextFormField(
                   controller: _companyNameController,
                   decoration: _decoration('Nom de la societe', Icons.business),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
-                          ? 'Champ requis'
-                          : null,
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Champ requis'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _companyPhoneController,
                   decoration: _decoration('Telephone societe', Icons.phone),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
-                          ? 'Champ requis'
-                          : null,
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Champ requis'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _companyCityController,
                   decoration: _decoration('Ville', Icons.location_city),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
-                          ? 'Champ requis'
-                          : null,
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Champ requis'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -154,27 +147,25 @@ class _ManagerSignupScreenState extends State<ManagerSignupScreen> {
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  'Compte manager',
+                  'Compte proprietaire',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _managerNameController,
                   decoration: _decoration('Nom complet', Icons.person),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
-                          ? 'Champ requis'
-                          : null,
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Champ requis'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: _managerEmailController,
                   keyboardType: TextInputType.emailAddress,
                   decoration: _decoration('Email', Icons.mail_outline),
-                  validator: (value) =>
-                      (value == null || value.trim().isEmpty)
-                          ? 'Champ requis'
-                          : null,
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Champ requis'
+                      : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -187,9 +178,7 @@ class _ManagerSignupScreenState extends State<ManagerSignupScreen> {
                       onPressed: () =>
                           setState(() => _showPassword = !_showPassword),
                       icon: Icon(
-                        _showPassword
-                            ? Icons.visibility
-                            : Icons.visibility_off,
+                        _showPassword ? Icons.visibility : Icons.visibility_off,
                       ),
                     ),
                   ),
@@ -224,8 +213,9 @@ class _ManagerSignupScreenState extends State<ManagerSignupScreen> {
                             height: 20,
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
-                              valueColor:
-                                  AlwaysStoppedAnimation<Color>(Colors.white),
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
                             ),
                           )
                         : const Text('Creer et continuer'),

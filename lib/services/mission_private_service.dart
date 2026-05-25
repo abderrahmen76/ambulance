@@ -1,6 +1,8 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../models/mission_model.dart';
+import 'app_memory_cache_service.dart';
+import 'performance_log_service.dart';
 import 'session_security_service.dart';
 
 class MissionPrivateService {
@@ -10,8 +12,11 @@ class MissionPrivateService {
   Future<Map<String, Map<String, dynamic>>> getManyMissionPrivateData(
     Iterable<String> missionIds,
   ) async {
+    final trace = PerformanceLog.start('private PHI batch fetch');
     await _sessionSecurityService.ensureFreshSession();
+    trace.checkpoint('fresh_session');
     await _sessionSecurityService.assertCurrentDeviceSessionActive();
+    trace.checkpoint('device_session');
 
     final normalizedIds = missionIds
         .map((value) => value.trim())
@@ -20,7 +25,28 @@ class MissionPrivateService {
         .toList();
 
     if (normalizedIds.isEmpty) {
+      trace.end(meta: {'count': 0, 'skipped': true});
       return const <String, Map<String, dynamic>>{};
+    }
+
+    final result = <String, Map<String, dynamic>>{};
+    final missingIds = <String>[];
+    for (final missionId in normalizedIds) {
+      final cached = MissionPhiMemoryCache.single.get(missionId);
+      if (cached != null) {
+        result[missionId] = cached;
+      } else {
+        missingIds.add(missionId);
+      }
+    }
+
+    if (missingIds.isEmpty) {
+      trace.end(meta: {
+        'requested': normalizedIds.length,
+        'received': result.length,
+        'cache': 'hit',
+      });
+      return result;
     }
 
     final response = await Supabase.instance.client.functions.invoke(
@@ -28,8 +54,12 @@ class MissionPrivateService {
       headers: await _sessionSecurityService.buildFunctionHeaders(),
       body: {
         'action': 'get_many_private',
-        'mission_ids': normalizedIds,
+        'mission_ids': missingIds,
       },
+    );
+    trace.checkpoint(
+      'edge_function_returned',
+      meta: {'count': missingIds.length},
     );
 
     final payload = Map<String, dynamic>.from(
@@ -44,19 +74,34 @@ class MissionPrivateService {
           )
         : const <Map<String, dynamic>>[];
 
-    final result = <String, Map<String, dynamic>>{};
     for (final item in items) {
       final missionId = item['mission_id']?.toString();
       if (missionId == null || missionId.isEmpty) {
         continue;
       }
       result[missionId] = item;
+      MissionPhiMemoryCache.single.set(missionId, item);
     }
 
+    trace.end(meta: {
+      'requested': normalizedIds.length,
+      'fetched': missingIds.length,
+      'received': result.length,
+    });
     return result;
   }
 
   Future<Map<String, dynamic>> getMissionPrivateData(String missionId) async {
+    final trace = PerformanceLog.start(
+      'private PHI single fetch',
+      meta: {'mission_id': missionId},
+    );
+    final cached = MissionPhiMemoryCache.single.get(missionId);
+    if (cached != null) {
+      trace.end(meta: {'has_data': cached.isNotEmpty, 'cache': 'hit'});
+      return cached;
+    }
+
     await _sessionSecurityService.ensureFreshSession();
     await _sessionSecurityService.assertCurrentDeviceSessionActive();
 
@@ -69,9 +114,12 @@ class MissionPrivateService {
       },
     );
 
-    return Map<String, dynamic>.from(
+    final data = Map<String, dynamic>.from(
       response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
     );
+    MissionPhiMemoryCache.single.set(missionId, data);
+    trace.end(meta: {'has_data': data.isNotEmpty});
+    return data;
   }
 
   Future<Map<String, dynamic>> saveTechnicalSheet({
@@ -124,6 +172,7 @@ class MissionPrivateService {
         },
       },
     );
+    MissionPhiMemoryCache.single.remove(mission.id);
 
     return Map<String, dynamic>.from(
       response.data as Map<String, dynamic>? ?? const <String, dynamic>{},

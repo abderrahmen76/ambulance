@@ -87,9 +87,22 @@ class FuelCardService {
       // Extract kilometrage and ambulanceId for later use
       final kilometrage = fuelData['kilometrage'];
       final ambulanceId = fuelData['ambulance_id'];
+      final driverName = fuelData['driver_name']?.toString().trim() ?? '';
+      final soldesPaid = (fuelData['soldes_paid'] is num)
+          ? (fuelData['soldes_paid'] as num).toDouble()
+          : double.tryParse(fuelData['soldes_paid']?.toString() ?? '') ?? 0.0;
 
       print(
           '[FuelCardService] Adding fuel card with kilometrage: $kilometrage, ambulanceId: $ambulanceId');
+
+      if (ambulanceId != null && driverName.toLowerCase() != 'refill') {
+        final currentBalance = await getCurrentCardBalance(ambulanceId.toString());
+        if (soldesPaid > currentBalance) {
+          throw Exception(
+            'Solde insuffisant. Solde actuel: ${currentBalance.toStringAsFixed(2)} TND',
+          );
+        }
+      }
 
       // Post fuel card with all data including kilometrage
       final response = await _apiClient.post(

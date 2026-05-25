@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../config/constants.dart';
 import '../models/user_model.dart';
@@ -6,6 +8,10 @@ import '../models/ambulance_model.dart';
 import '../services/mission_service.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/ambulance_service.dart';
+import '../services/performance_log_service.dart';
+import '../services/resume_refresh_service.dart';
+import '../services/realtime_event_bus_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/clinic_dropdown_field.dart';
 import '../widgets/manager_nav_drawer.dart';
@@ -31,8 +37,11 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
     with WidgetsBindingObserver {
   final _apiClient = ApiClient();
   final _missionService = MissionService();
+  final _ambulanceService = AmbulanceService();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  static const _tabStaleTimeout = Duration(minutes: 3);
   int _selectedNavIndex = 0;
+  final Set<int> _visitedNavTabs = {0};
   late final List<Widget>
   _screens; // 🔥 Created ONCE in initState, never recreated
 
@@ -48,11 +57,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
   double revenueWeeklyChangePercent = 0;
   List<Mission> missions = [];
   List<Ambulance> ambulances = [];
+  DateTime? _lastDashboardLoadedAt;
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
 
   String get _managerHeaderTitle {
     final name = widget.user.name.trim();
     return name.isNotEmpty ? name : 'Manager';
   }
+
+  bool get _isOwner => widget.user.role?.trim().toLowerCase() == 'owner';
 
   Future<List<dynamic>> _attachClinicNames(List<dynamic> missionRows) async {
     final clinicTenantIds = missionRows
@@ -67,7 +80,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
     }
 
     try {
-      final apiClient = ApiClient();
+      final apiClient = _apiClient;
       final tenantRows = await apiClient.get(
         '/rest/v1/tenants',
         filters: {'id': 'in.(${clinicTenantIds.join(',')})'},
@@ -123,47 +136,104 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       '[DEBUG] ManagerDashboard: _screens created with ${_screens.length} widgets',
     );
 
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _loadDashboardData();
   }
 
   @override
   void dispose() {
+    _realtimeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+      return;
+    }
+
     if (state == AppLifecycleState.resumed) {
+      final resumeEvent = ResumeRefreshService.buildResumeEvent(
+        scope: 'manager',
+        activeTabIndex: _selectedNavIndex,
+      );
+      final resumeTrace = PerformanceLog.start(
+        'app resume -> dashboard ready',
+        meta: {
+          'screen': 'manager_dashboard',
+          'tab': _selectedNavIndex,
+          'backgrounded_ms': resumeEvent.backgroundedFor.inMilliseconds,
+          'immediate': resumeEvent.shouldRefreshVisibleImmediately,
+        },
+      );
       print('[DEBUG] App resumed - lifecycle event detected');
       debugPrint(
-        '[ManagerDashboardScreen] App resumed, reloading dashboard...',
+        '[ManagerDashboardScreen] App resumed after ${resumeEvent.backgroundedFor.inSeconds}s',
       );
-      _loadDashboardData();
+
+      if (_selectedNavIndex == 0) {
+        _loadDashboardData(parentTrace: resumeTrace);
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          resumeTrace.end(
+            meta: {
+              'handled_by_visible_tab': true,
+              'tab': _selectedNavIndex,
+            },
+          );
+        });
+      }
       // Dashboard content will trigger nested widget lifecycle events
       // No need to force rebuild - keep widgets alive with IndexedStack
     }
   }
 
-  Future<void> _loadDashboardData() async {
+  Future<void> _loadDashboardData({
+    PerfTrace? parentTrace,
+    bool forceRefresh = false,
+  }) async {
+    final trace = parentTrace ??
+        PerformanceLog.start(
+          'dashboard load',
+          meta: {'screen': 'manager_dashboard', 'tab': _selectedNavIndex},
+        );
     try {
       print('🔄 Manager Dashboard: Starting data load...');
       print('[DEBUG] Current _selectedNavIndex: $_selectedNavIndex');
       print('[DEBUG] totalMissions before load: $totalMissions');
-      final apiClient = ApiClient();
 
       print('📥 Fetching missions...');
-      final missionData = await apiClient.get(SupabaseConfig.missionsTable);
-      final enrichedMissionData = await _attachClinicNames(missionData);
-      print('✅ Missions fetched: ${missionData.length} records');
+      var missionList = await _missionService.getAllMissionsOperational(
+        forceRefresh: forceRefresh,
+      );
+      trace.checkpoint(
+        'missions_fetch_done',
+        meta: {'count': missionList.length},
+      );
+      final enrichedMissionData =
+          missionList.map((mission) => mission.toJson()).toList();
+      print('✅ Missions fetched: ${missionList.length} records');
 
       print('📥 Fetching ambulances...');
-      final ambulanceData = await apiClient.get(SupabaseConfig.ambulancesTable);
+      final ambulanceTrace = PerformanceLog.start('ambulances fetch');
+      var ambulanceList = await _ambulanceService.getAllAmbulances();
+      final ambulanceData =
+          ambulanceList.map((ambulance) => ambulance.toJson()).toList();
+      ambulanceTrace.end(meta: {'count': ambulanceData.length});
+      trace.checkpoint(
+        'ambulances_fetch_done',
+        meta: {'count': ambulanceData.length},
+      );
       print('✅ Ambulances fetched: ${ambulanceData.length} records');
 
       // Parse missions with error handling
       print('🔄 Parsing missions...');
-      List<Mission> missionList = [];
+      missionList = [];
       for (int i = 0; i < enrichedMissionData.length; i++) {
         try {
           final mission = Mission.fromJson(enrichedMissionData[i]);
@@ -177,7 +247,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
 
       // Parse ambulances with error handling
       print('🔄 Parsing ambulances...');
-      List<Ambulance> ambulanceList = [];
+      ambulanceList = [];
       for (int i = 0; i < ambulanceData.length; i++) {
         try {
           final ambulance = Ambulance.fromJson(ambulanceData[i]);
@@ -190,6 +260,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       print('✅ Parsed ${ambulanceList.length} ambulances successfully');
 
       if (mounted) {
+        _lastDashboardLoadedAt = DateTime.now();
         // Calculate today's date
         final now = DateTime.now();
 
@@ -359,6 +430,14 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
             '[DEBUG] setState() completed - totalMissions is now $totalMissions',
           );
         });
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          trace.end(
+            meta: {
+              'missions': missionList.length,
+              'ambulances': ambulanceList.length,
+            },
+          );
+        });
 
         print('✅ Dashboard data loaded successfully');
       }
@@ -373,6 +452,149 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
           ),
         );
       }
+    }
+  }
+
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+
+    switch (event.type) {
+      case RealtimeEventType.missionInserted:
+      case RealtimeEventType.missionUpdated:
+        final mission = event.mission;
+        if (mission == null) return;
+        final updatedMissions = List<Mission>.from(missions);
+        final existingIndex =
+            updatedMissions.indexWhere((item) => item.id == mission.id);
+        if (existingIndex == -1) {
+          updatedMissions.insert(0, mission);
+        } else {
+          updatedMissions[existingIndex] = mission;
+        }
+        _applyRealtimeDashboardLists(updatedMissions, ambulances);
+        break;
+      case RealtimeEventType.missionDeleted:
+        final missionId = event.recordId;
+        if (missionId == null) return;
+        final updatedMissions =
+            missions.where((mission) => mission.id != missionId).toList();
+        _applyRealtimeDashboardLists(updatedMissions, ambulances);
+        break;
+      case RealtimeEventType.missionRefreshRequested:
+        _loadDashboardData(forceRefresh: true);
+        break;
+      case RealtimeEventType.ambulanceUpdated:
+        final ambulance = event.ambulance;
+        if (ambulance == null) return;
+        final updatedAmbulances = List<Ambulance>.from(ambulances);
+        final existingIndex =
+            updatedAmbulances.indexWhere((item) => item.id == ambulance.id);
+        if (existingIndex == -1) {
+          updatedAmbulances.add(ambulance);
+        } else {
+          updatedAmbulances[existingIndex] = ambulance;
+        }
+        _applyRealtimeDashboardLists(missions, updatedAmbulances);
+        break;
+    }
+  }
+
+  void _applyRealtimeDashboardLists(
+    List<Mission> missionList,
+    List<Ambulance> ambulanceList,
+  ) {
+    final now = DateTime.now();
+    final todayMissions = missionList.where((mission) {
+      try {
+        final missionDate = DateTime.parse(mission.missionDate);
+        return missionDate.year == now.year &&
+            missionDate.month == now.month &&
+            missionDate.day == now.day;
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+
+    final activeMissionsWithAmbulance = missionList
+        .where(
+          (mission) =>
+              (mission.status == 'active' || mission.status == 'pending') &&
+              mission.ambulanceId.isNotEmpty,
+        )
+        .toList();
+    final occupiedAmbulanceIds = activeMissionsWithAmbulance
+        .map((mission) => mission.ambulanceId)
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final freeAmbulanceCount = ambulanceList
+        .where((ambulance) => !occupiedAmbulanceIds.contains(ambulance.id))
+        .length;
+
+    final weekAgo = DateTime.now().subtract(const Duration(days: 7));
+    final twoWeeksAgo = DateTime.now().subtract(const Duration(days: 14));
+    final thisWeekMissions = missionList.where((mission) {
+      try {
+        return DateTime.parse(mission.missionDate).isAfter(weekAgo);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+    final lastWeekCompleted = missionList.where((mission) {
+      try {
+        final missionDate = DateTime.parse(mission.missionDate);
+        return mission.status == 'completed' &&
+            missionDate.isAfter(twoWeeksAgo) &&
+            missionDate.isBefore(weekAgo);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+    final thisWeekCompleted = thisWeekMissions
+        .where((mission) => mission.status == 'completed')
+        .toList();
+    final completedPercent = lastWeekCompleted.isNotEmpty
+        ? ((thisWeekCompleted.length - lastWeekCompleted.length) /
+            lastWeekCompleted.length *
+            100)
+        : 0.0;
+
+    var thisWeekRevenue = 0.0;
+    for (final mission in thisWeekCompleted) {
+      thisWeekRevenue += double.tryParse(mission.missionPrice ?? '0') ?? 0.0;
+    }
+
+    setState(() {
+      missions = missionList;
+      ambulances = ambulanceList;
+      totalMissions = missionList.length;
+      activeMissions = missionList
+          .where((mission) =>
+              mission.status == 'pending' || mission.status == 'accepted')
+          .length;
+      completedMissions = thisWeekCompleted.length;
+      totalRevenue = thisWeekRevenue;
+      totalAmbulances = ambulanceList.length;
+      freeAmbulances = freeAmbulanceCount;
+      missionsWeeklyChangePercent = 0;
+      completedWeeklyChangePercent = completedPercent;
+      revenueWeeklyChangePercent = completedPercent;
+      _lastDashboardLoadedAt = DateTime.now();
+    });
+
+    debugPrint(
+      '[ManagerDashboard] realtime applied missions=${missionList.length} today=${todayMissions.length} ambulances=${ambulanceList.length}',
+    );
+  }
+
+  bool get _isDashboardDataStale {
+    final loadedAt = _lastDashboardLoadedAt;
+    if (loadedAt == null) return true;
+    return DateTime.now().difference(loadedAt) >= _tabStaleTimeout;
+  }
+
+  void _refreshDashboardIfStale() {
+    if (_isDashboardDataStale) {
+      _loadDashboardData();
     }
   }
 
@@ -675,6 +897,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                                 patientNameController.text,
                                 patientPhoneController.text,
                                 infirmierController.text,
+                                tarifController.text,
                                 notesController.text,
                               );
                             }
@@ -814,6 +1037,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
     String patientName,
     String patientPhone,
     String infirmierName,
+    String tarif,
     String notes,
   ) async {
     try {
@@ -826,6 +1050,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       print('      Priority: $priority');
       print('      Phone: $patientPhone');
       print('      Infirmier: $infirmierName');
+      print('      Tarif: $tarif');
 
       print('   🔀 Parsing patient name...');
       // Extract first and last name from patient name
@@ -848,7 +1073,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         patientLastName: lastName,
         patientPhone: patientPhone,
         infirmierName: infirmierName,
-        missionPrice: '0', // No price in dashboard creation - use 0
+        missionPrice: tarif,
         notes: notes,
         missionDate: DateTime.now().toIso8601String(),
       );
@@ -969,6 +1194,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       if (driverId.isNotEmpty) body['current_driver_id'] = driverId;
 
       await _apiClient.post(SupabaseConfig.ambulancesTable, body);
+      _ambulanceService.clearCache();
 
       if (mounted) {
         _loadDashboardData();
@@ -1004,11 +1230,23 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
         selectedIndex: _selectedNavIndex,
         scaffoldState: _scaffoldKey,
         onNavItemTapped: (index) {
+          final tabTrace = PerformanceLog.start(
+            'tab tap -> first frame',
+            meta: {
+              'screen': 'manager_dashboard_drawer',
+              'from': _selectedNavIndex,
+              'to': index,
+            },
+          );
           setState(() {
             _selectedNavIndex = index;
-            if (index == 0) {
-              _loadDashboardData();
-            }
+            _visitedNavTabs.add(index);
+          });
+          if (index == 0) {
+            _refreshDashboardIfStale();
+          }
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            tabTrace.end(meta: {'tab': index});
           });
         },
         onLogout: _logout,
@@ -1107,16 +1345,18 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
     );
     // 🔥 Dashboard is built DYNAMICALLY so it gets fresh data on setState()
     // Other tabs persist in _screens to avoid recreation
-    if (_selectedNavIndex == 0) {
-      print('[DEBUG] Building DASHBOARD content (index 0)');
-      print(
-        '[DEBUG] Dashboard will show: $totalMissions missions, $totalAmbulances ambulances',
-      );
-      return _buildDashboardContent(); // Builds fresh every time state changes with new data
-    }
-
-    print('[DEBUG] Using persisted widget at index $_selectedNavIndex');
-    return _screens[_selectedNavIndex]; // Directly return the persisted widget
+    return IndexedStack(
+      index: _selectedNavIndex,
+      children: List.generate(_screens.length, (index) {
+        if (index == 0) {
+          return _buildDashboardContent();
+        }
+        if (_visitedNavTabs.contains(index)) {
+          return _screens[index];
+        }
+        return const SizedBox.shrink();
+      }),
+    );
   }
 
   Widget _buildDashboardContent() {
@@ -1164,14 +1404,15 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
                     : '${completedWeeklyChangePercent.toStringAsFixed(1)}%',
                 completedWeeklyChangePercent >= 0,
               ),
-              _buildSmallStatCard(
-                'REVENUS TOTAUX / SEMAINE',
-                '${totalRevenue.toStringAsFixed(0)} TND',
-                revenueWeeklyChangePercent > 0
-                    ? '+${revenueWeeklyChangePercent.toStringAsFixed(1)}%'
-                    : '${revenueWeeklyChangePercent.toStringAsFixed(1)}%',
-                revenueWeeklyChangePercent >= 0,
-              ),
+              if (_isOwner)
+                _buildSmallStatCard(
+                  'REVENUS TOTAUX / SEMAINE',
+                  '${totalRevenue.toStringAsFixed(0)} TND',
+                  revenueWeeklyChangePercent > 0
+                      ? '+${revenueWeeklyChangePercent.toStringAsFixed(1)}%'
+                      : '${revenueWeeklyChangePercent.toStringAsFixed(1)}%',
+                  revenueWeeklyChangePercent >= 0,
+                ),
               _buildSmallStatCard(
                 'AMBULANCES LIBRES',
                 freeAmbulances.toString(),
@@ -1902,9 +2143,20 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       ],
       onTap: (index) {
         print('[DEBUG] Tab tapped: index=$index (was $_selectedNavIndex)');
+        final tabTrace = PerformanceLog.start(
+          'tab tap -> first frame',
+          meta: {'screen': 'manager_dashboard', 'from': _selectedNavIndex, 'to': index},
+        );
         setState(() {
           _selectedNavIndex = index;
+          _visitedNavTabs.add(index);
           print('[DEBUG] Tab switched to index=$index');
+        });
+        if (index == 0) {
+          _refreshDashboardIfStale();
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          tabTrace.end(meta: {'tab': index});
         });
       },
     );
@@ -1938,9 +2190,20 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen>
       ],
       onTap: (index) {
         print('[DEBUG] Tab tapped: index=$index (was $_selectedNavIndex)');
+        final tabTrace = PerformanceLog.start(
+          'tab tap -> first frame',
+          meta: {'screen': 'manager_dashboard', 'from': _selectedNavIndex, 'to': index},
+        );
         setState(() {
           _selectedNavIndex = index;
+          _visitedNavTabs.add(index);
           print('[DEBUG] Tab switched to index=$index');
+        });
+        if (index == 0) {
+          _refreshDashboardIfStale();
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          tabTrace.end(meta: {'tab': index});
         });
       },
     );

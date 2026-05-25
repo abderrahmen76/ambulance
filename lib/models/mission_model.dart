@@ -4,6 +4,7 @@ import 'dart:convert';
 /// Represents a mission/task for the ambulance
 class Mission {
   final String id;
+  final String? tenantId;
   final String missionNumber;
   final String missionDate;
   final String fromLocation;
@@ -12,6 +13,8 @@ class Mission {
   final String? patientPhone;
   final String status;
   final String? dispatchPhase;
+  final String? assignedCompanyId;
+  final String? selectedProviderTenantId;
   final String priority;
   final String ambulanceId;
   final String? assignedAmbulanceId;
@@ -46,6 +49,7 @@ class Mission {
 
   Mission({
     required this.id,
+    this.tenantId,
     required this.missionNumber,
     required this.missionDate,
     required this.fromLocation,
@@ -54,6 +58,8 @@ class Mission {
     this.patientPhone,
     required this.status,
     this.dispatchPhase,
+    this.assignedCompanyId,
+    this.selectedProviderTenantId,
     required this.priority,
     required this.ambulanceId,
     this.assignedAmbulanceId,
@@ -96,6 +102,7 @@ class Mission {
 
     return Mission(
       id: _toString(json['id']),
+      tenantId: _toNullableString(json['tenant_id']),
       missionNumber: json['mission_number'] as String? ?? 'N/A',
       missionDate: json['mission_date'] as String? ?? '',
       fromLocation: json['from_location'] as String? ?? '',
@@ -104,6 +111,9 @@ class Mission {
       patientPhone: json['patient_phone'] as String?,
       status: json['status'] as String? ?? 'pending',
       dispatchPhase: dispatchPhase,
+      assignedCompanyId: _toNullableString(json['assigned_company_id']),
+      selectedProviderTenantId:
+          _toNullableString(json['selected_provider_tenant_id']),
       priority: json['priority'] as String? ?? 'normal',
       ambulanceId: ambulanceId,
       assignedAmbulanceId: _toNullableString(json['assigned_ambulance_id']),
@@ -141,6 +151,7 @@ class Mission {
   /// Convert Mission to JSON
   Map<String, dynamic> toJson() => {
     'id': id,
+    'tenant_id': tenantId,
     'mission_number': missionNumber,
     'mission_date': missionDate,
     'from_location': fromLocation,
@@ -149,6 +160,8 @@ class Mission {
     'patient_phone': patientPhone,
     'status': status,
     'dispatch_phase': dispatchPhase,
+    'assigned_company_id': assignedCompanyId,
+    'selected_provider_tenant_id': selectedProviderTenantId,
     'priority': priority,
     'ambulance_id': ambulanceId,
     'assigned_ambulance_id': assignedAmbulanceId,
@@ -184,6 +197,7 @@ class Mission {
 
   Mission copyWith({
     String? id,
+    String? tenantId,
     String? missionNumber,
     String? missionDate,
     String? fromLocation,
@@ -192,6 +206,8 @@ class Mission {
     String? patientPhone,
     String? status,
     String? dispatchPhase,
+    String? assignedCompanyId,
+    String? selectedProviderTenantId,
     String? priority,
     String? ambulanceId,
     String? assignedAmbulanceId,
@@ -226,6 +242,7 @@ class Mission {
   }) {
     return Mission(
       id: id ?? this.id,
+      tenantId: tenantId ?? this.tenantId,
       missionNumber: missionNumber ?? this.missionNumber,
       missionDate: missionDate ?? this.missionDate,
       fromLocation: fromLocation ?? this.fromLocation,
@@ -234,6 +251,9 @@ class Mission {
       patientPhone: patientPhone ?? this.patientPhone,
       status: status ?? this.status,
       dispatchPhase: dispatchPhase ?? this.dispatchPhase,
+      assignedCompanyId: assignedCompanyId ?? this.assignedCompanyId,
+      selectedProviderTenantId:
+          selectedProviderTenantId ?? this.selectedProviderTenantId,
       priority: priority ?? this.priority,
       ambulanceId: ambulanceId ?? this.ambulanceId,
       assignedAmbulanceId: assignedAmbulanceId ?? this.assignedAmbulanceId,

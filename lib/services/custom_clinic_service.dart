@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import '../config/constants.dart';
+import 'app_memory_cache_service.dart';
 import 'api_client.dart';
+import 'performance_log_service.dart';
 
 /// Service for managing custom clinics
 /// Stores user-created clinic names by city permanently in Supabase
@@ -18,9 +20,14 @@ class CustomClinicService {
 
   /// Get all custom clinics for a specific city
   Future<List<String>> getClinicsByCity(String city) async {
-    if (!_customClinicsByCity.containsKey(city)) {
-      await _loadCustomClinicsByCity(city);
+    final cacheKey = city.trim().toLowerCase();
+    final cached = CustomClinicsCache.instance.get(cacheKey);
+    if (cached != null) {
+      _customClinicsByCity[city] = cached;
+      return cached;
     }
+
+    await _loadCustomClinicsByCity(city);
 
     // Return only custom clinics for this city (no built-in clinics)
     final customClinics = _customClinicsByCity[city] ?? [];
@@ -34,6 +41,10 @@ class CustomClinicService {
 
   /// Load custom clinics for a specific city from Supabase
   Future<void> _loadCustomClinicsByCity(String city) async {
+    final trace = PerformanceLog.start(
+      'custom clinics fetch',
+      meta: {'city': city},
+    );
     try {
       final result = await _apiClient.get(
         '/rest/v1/custom_clinics',
@@ -46,13 +57,16 @@ class CustomClinicService {
           .toList();
 
       _customClinicsByCity[city] = customClinics;
+      CustomClinicsCache.instance.set(city.trim().toLowerCase(), customClinics);
 
       debugPrint(
           '[CustomClinicService] Loaded ${customClinics.length} custom clinics for city: $city');
+      trace.end(meta: {'city': city, 'count': customClinics.length});
     } catch (e) {
       debugPrint(
           '[CustomClinicService] Error loading custom clinics for $city: $e');
       _customClinicsByCity[city] = [];
+      trace.end(meta: {'city': city, 'error': e.runtimeType});
     }
   }
 
@@ -87,6 +101,7 @@ class CustomClinicService {
         _customClinicsByCity[city] = [];
       }
       _customClinicsByCity[city]!.add(trimmed);
+      CustomClinicsCache.instance.remove(city.trim().toLowerCase());
 
       debugPrint(
           '[CustomClinicService] Added custom clinic: $trimmed for city: $city');
@@ -122,6 +137,7 @@ class CustomClinicService {
         _customClinicsByCity[city]!
             .removeWhere((c) => c.toLowerCase() == clinicName.toLowerCase());
       }
+      CustomClinicsCache.instance.remove(city.trim().toLowerCase());
 
       debugPrint(
           '[CustomClinicService] Deleted custom clinic: $clinicName from city: $city');

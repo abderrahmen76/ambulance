@@ -1,10 +1,13 @@
 import '../config/constants.dart';
 import '../models/user_model.dart';
+import 'dashboard_preload_service.dart';
+import 'app_realtime_service.dart';
 import 'fleet_tracking/background_location_service.dart';
 import 'fleet_tracking/fleet_tracking_service.dart';
 import 'tracking_presence_service.dart';
 import '../utils/jwt_decoder.dart';
 import 'api_client.dart';
+import 'app_memory_cache_service.dart';
 import 'session_security_service.dart';
 import 'fcm_token_service.dart';
 import 'notification_service.dart';
@@ -168,6 +171,8 @@ class AuthService {
 
       await _saveLegacyUserToStorage(user);
       await _sessionSecurityService.registerCurrentDeviceSession();
+      AppRealtimeService.instance.startForUser(user);
+      DashboardPreloadService().preloadAfterAuth(user);
 
       // Register FCM token for push notifications (mobile only)
       // Skip on Web - Firebase Messaging doesn't work properly with web interop
@@ -247,6 +252,7 @@ class AuthService {
     }
 
     await _stopAllTrackingRuntime();
+    AppRealtimeService.instance.stop();
     try {
       await Supabase.instance.client.auth.signOut();
     } catch (e) {
@@ -254,6 +260,7 @@ class AuthService {
     }
     await _clearLegacyUserFromStorage();
     _sessionSecurityService.clearSensitiveAccessWindow();
+    AppMemoryCacheService.clearAll();
     _cachedUser = null;
   }
 
@@ -379,6 +386,8 @@ class AuthService {
         await _saveLegacyUserToStorage(_cachedUser!);
         await _sessionSecurityService.registerCurrentDeviceSession();
         await _sessionSecurityService.assertCurrentDeviceSessionActive();
+        AppRealtimeService.instance.startForUser(_cachedUser!);
+        DashboardPreloadService().preloadAfterAuth(_cachedUser!);
 
         // Register FCM token on session restore (mobile only)
         if (!kIsWeb && _cachedUser != null) {

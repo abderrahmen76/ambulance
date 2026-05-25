@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
@@ -5,7 +7,11 @@ import '../models/mission_model.dart';
 import '../services/mission_service.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/ambulance_service.dart';
+import '../services/app_memory_cache_service.dart';
 import '../services/pdf_service.dart';
+import '../services/resume_refresh_service.dart';
+import '../services/realtime_event_bus_service.dart';
 import '../config/constants.dart';
 import '../utils/responsive.dart';
 import '../widgets/clinic_dropdown_field.dart';
@@ -26,11 +32,19 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
     with WidgetsBindingObserver {
   final MissionService _missionService = MissionService();
   final ApiClient _apiClient = ApiClient();
+  final AmbulanceService _ambulanceService = AmbulanceService();
   late Future<List<Mission>> _allMissionsFuture;
   String _selectedStatus = 'active'; // active, completed, cancelled, historique
   String _selectedAmbulanceFilter = ''; // Filter for historique tab
   Map<String, String> _ambulanceCache = {}; // Cache ambulance numbers
   bool _isProcessingTabChange = false; // Debounce rapid tab clicks
+  List<Mission> _cachedMissions = [];
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
+
+  String _normalizeMissionPriorityForDb(String priority) {
+    final normalized = priority.trim().toLowerCase();
+    return normalized.isEmpty ? 'normal' : normalized;
+  }
 
   Future<List<dynamic>> _attachClinicNames(List<dynamic> missionRows) async {
     final clinicTenantIds = missionRows
@@ -79,40 +93,143 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _loadMissions();
   }
 
   @override
   void dispose() {
+    _realtimeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      debugPrint('[ManagerMissionsScreen] App resumed, reloading missions...');
-      _loadMissions();
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
     }
   }
 
-  void _loadMissions() {
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 1) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
+      debugPrint('[ManagerMissionsScreen] Long resume, refreshing visible tab');
+      _loadMissions();
+    } else {
+      debugPrint('[ManagerMissionsScreen] Short resume, using cached data');
+    }
+  }
+
+  void _loadMissions({bool forceRefresh = false}) {
     if (mounted) {
       setState(() {
-        _allMissionsFuture = _getAllMissions();
+        _allMissionsFuture = _getAllMissions(forceRefresh: forceRefresh);
       });
     }
   }
 
-  Future<List<Mission>> _getAllMissions() async {
+  Future<List<Mission>> _getAllMissions({bool forceRefresh = false}) async {
     try {
-      final missionData = await _apiClient.get(SupabaseConfig.missionsTable);
-      final enrichedMissionData = await _attachClinicNames(missionData);
+      final missions = await _missionService.getAllMissionsOperational(
+        forceRefresh: forceRefresh,
+      );
+      _cachedMissions = missions;
+      final enrichedMissionData =
+          missions.map((mission) => mission.toJson()).toList();
       _preloadAmbulanceNames(enrichedMissionData);
-      return enrichedMissionData.map((json) => Mission.fromJson(json)).toList();
+      return missions;
     } catch (e) {
       print('Error loading missions: $e');
       rethrow;
+    }
+  }
+
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+    if (event.type == RealtimeEventType.missionRefreshRequested) {
+      _loadMissions(forceRefresh: true);
+      return;
+    }
+    if (_cachedMissions.isEmpty) return;
+
+    final updated = List<Mission>.from(_cachedMissions);
+    switch (event.type) {
+      case RealtimeEventType.missionInserted:
+      case RealtimeEventType.missionUpdated:
+        final mission = event.mission;
+        if (mission == null) return;
+        final index = updated.indexWhere((item) => item.id == mission.id);
+        if (index == -1) {
+          updated.insert(0, mission);
+        } else {
+          updated[index] = mission;
+        }
+        break;
+      case RealtimeEventType.missionDeleted:
+        final missionId = event.recordId;
+        if (missionId == null) return;
+        updated.removeWhere((mission) => mission.id == missionId);
+        break;
+      case RealtimeEventType.missionRefreshRequested:
+        return;
+      case RealtimeEventType.ambulanceUpdated:
+        final ambulance = event.ambulance;
+        if (ambulance == null) return;
+        _ambulanceCache[ambulance.id] = ambulance.ambulanceNumber;
+        setState(() {});
+        return;
+    }
+
+    _cachedMissions = updated;
+    _preloadAmbulanceNames(updated.map((mission) => mission.toJson()).toList());
+    setState(() {
+      _allMissionsFuture = Future.value(List<Mission>.from(_cachedMissions));
+    });
+  }
+
+  void _applyMissionMutation(Mission mission) {
+    MissionListCache.instance.clear();
+
+    if (_cachedMissions.isEmpty) {
+      _loadMissions(forceRefresh: true);
+      return;
+    }
+
+    final updated = List<Mission>.from(_cachedMissions);
+    final index = updated.indexWhere((item) => item.id == mission.id);
+    if (index == -1) {
+      updated.insert(0, mission);
+    } else {
+      updated[index] = mission;
+    }
+
+    _cachedMissions = updated;
+    _preloadAmbulanceNames(updated.map((item) => item.toJson()).toList());
+    setState(() {
+      _allMissionsFuture = Future.value(List<Mission>.from(_cachedMissions));
+    });
+
+    unawaited(_refreshMissionsInBackground());
+  }
+
+  Future<void> _refreshMissionsInBackground() async {
+    try {
+      final missions = await _getAllMissions(forceRefresh: true);
+      if (!mounted) return;
+      setState(() {
+        _allMissionsFuture = Future.value(List<Mission>.from(missions));
+      });
+    } catch (e) {
+      debugPrint('[ManagerMissionsScreen] Background refresh failed: $e');
     }
   }
 
@@ -134,14 +251,22 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
 
   Future<void> _loadAmbulanceNames(List<String> ambulanceIds) async {
     try {
-      final ambulanceData =
-          await _apiClient.get(SupabaseConfig.ambulancesTable);
+      final ambulanceData = (await _ambulanceService.getAllAmbulances())
+          .map((ambulance) => ambulance.toJson())
+          .toList();
+      var cacheChanged = false;
       for (var amb in ambulanceData) {
         final id = amb['id'].toString();
-        final number = amb['ambulance_number'] as String?;
-        if (number != null) {
+        final number = amb['ambulance_number']?.toString().trim();
+        if (number != null &&
+            number.isNotEmpty &&
+            _ambulanceCache[id] != number) {
           _ambulanceCache[id] = number;
+          cacheChanged = true;
         }
+      }
+      if (cacheChanged && mounted) {
+        setState(() {});
       }
     } catch (e) {
       print('Error loading ambulance names: $e');
@@ -149,14 +274,13 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
   }
 
   String _getAmbulanceName(String ambulanceId) {
+    if (ambulanceId.trim().isEmpty) {
+      return 'Non assignée';
+    }
     if (_ambulanceCache.containsKey(ambulanceId)) {
       return _ambulanceCache[ambulanceId]!;
     }
-    // Fallback: use first 4 chars or whole ID if shorter
-    final displayId = ambulanceId.length >= 4
-        ? ambulanceId.substring(0, 4).toUpperCase()
-        : ambulanceId.toUpperCase();
-    return 'AMB-$displayId';
+    return 'Chargement...';
   }
 
   Future<String> _generateMissionNumber() async {
@@ -476,7 +600,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
           Expanded(
             child: RefreshIndicator(
               onRefresh: () {
-                _loadMissions();
+                _loadMissions(forceRefresh: true);
                 return _allMissionsFuture;
               },
               child: FutureBuilder<List<Mission>>(
@@ -516,6 +640,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                   }
 
                   final allMissions = snapshot.data ?? [];
+                  _cachedMissions = allMissions;
                   final filteredMissions = allMissions.where((mission) {
                     // Filter by status
                     bool statusMatch = false;
@@ -623,6 +748,17 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
         ),
       ),
     );
+  }
+
+  Future<Mission> _hydrateMissionForPhi(Mission mission) async {
+    try {
+      return await _missionService.hydrateMissionWithPrivateData(mission);
+    } catch (e) {
+      debugPrint(
+        '[ManagerMissionsScreen] Could not load private mission data for ${mission.id}: $e',
+      );
+      return mission;
+    }
   }
 
   Widget _buildMissionsList(BuildContext context, List<Mission> missions) {
@@ -875,7 +1011,11 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _showEditMissionDialog(mission),
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _showEditMissionDialog(hydrated);
+                  },
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Modifier'),
                   style: OutlinedButton.styleFrom(
@@ -919,43 +1059,49 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                 ),
             ],
           ),
-          // Facture and Imprimer buttons for completed/cancelled missions
-          if (!isActive) ...[
-            SizedBox(height: context.responsive.spacingSmall),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _generateMissionPDF(context, mission),
-                    icon: const Icon(Icons.print, size: 16),
-                    label: const Text('Imprimer'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(
-                        vertical: context.responsive.spacingSmall,
-                      ),
+          // Facture and fiche technique are available for every mission status.
+          SizedBox(height: context.responsive.spacingSmall),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _generateMissionPDF(context, hydrated);
+                  },
+                  icon: const Icon(Icons.print, size: 16),
+                  label: const Text('Imprimer'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(
+                      vertical: context.responsive.spacingSmall,
                     ),
                   ),
                 ),
-                SizedBox(width: context.responsive.spacingSmall),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _generateInvoice(context, mission),
-                    icon: const Icon(Icons.receipt, size: 16),
-                    label: const Text('Facture'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(
-                        vertical: context.responsive.spacingSmall,
-                      ),
+              ),
+              SizedBox(width: context.responsive.spacingSmall),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _generateInvoice(context, hydrated);
+                  },
+                  icon: const Icon(Icons.receipt, size: 16),
+                  label: const Text('Facture'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(
+                      vertical: context.responsive.spacingSmall,
                     ),
                   ),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1505,11 +1651,30 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
         TextEditingController(text: mission.driverName ?? '');
     final infirmierNameCtrl =
         TextEditingController(text: mission.infirmierName ?? '');
-    String selectedPriority = mission.priority;
+    final priorityOptions = {
+      for (final priority in LocationData.priorityOptions)
+        priority.toLowerCase().trim(): priority,
+    }.values.toList();
+    final normalizedMissionPriority = mission.priority.toLowerCase().trim();
+    final hasKnownPriority = priorityOptions.any(
+      (priority) => priority.toLowerCase().trim() == normalizedMissionPriority,
+    );
+    String selectedPriority = priorityOptions.firstWhere(
+      (priority) =>
+          priority.toLowerCase().trim() ==
+          normalizedMissionPriority,
+      orElse: () => 'autre',
+    );
+    final customPriorityCtrl = TextEditingController(
+      text: hasKnownPriority || normalizedMissionPriority == 'autre'
+          ? ''
+          : mission.priority,
+    );
 
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
         title: const Text('Modifier la Mission'),
         content: SingleChildScrollView(
           child: Form(
@@ -1578,7 +1743,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                     labelText: 'Priorité',
                     border: OutlineInputBorder(),
                   ),
-                  items: LocationData.priorityOptions.map((priority) {
+                  items: priorityOptions.map((priority) {
                     return DropdownMenuItem(
                       value: priority,
                       child:
@@ -1586,9 +1751,28 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                     );
                   }).toList(),
                   onChanged: (value) {
-                    if (value != null) selectedPriority = value;
+                    if (value == null) return;
+                    setDialogState(() => selectedPriority = value);
                   },
                 ),
+                if (selectedPriority.toLowerCase().trim() == 'autre') ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: customPriorityCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Priorité personnalisée',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (selectedPriority.toLowerCase().trim() != 'autre') {
+                        return null;
+                      }
+                      return value?.trim().isEmpty ?? true
+                          ? 'Entrez une priorité'
+                          : null;
+                    },
+                  ),
+                ],
               ],
             ),
           ),
@@ -1601,6 +1785,10 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
           ElevatedButton(
             onPressed: () {
               if (formKey.currentState?.validate() ?? false) {
+                final priorityToSave =
+                    selectedPriority.toLowerCase().trim() == 'autre'
+                        ? customPriorityCtrl.text.trim()
+                        : selectedPriority;
                 Navigator.pop(dialogContext);
                 _updateMission(
                   mission,
@@ -1610,7 +1798,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
                   toLocationCtrl.text,
                   driverNameCtrl.text,
                   infirmierNameCtrl.text,
-                  selectedPriority,
+                  priorityToSave,
                 );
               }
             },
@@ -1620,6 +1808,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
             child: const Text('Enregistrer'),
           ),
         ],
+        ),
       ),
     );
   }
@@ -1635,6 +1824,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
     String priority,
   ) async {
     try {
+      final dbPriority = _normalizeMissionPriorityForDb(priority);
       await _missionService.updateMissionField(
           mission.id, 'mission_number', missionNumber);
       await _missionService.updateMissionField(
@@ -1648,10 +1838,20 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
       await _missionService.updateMissionField(
           mission.id, 'infirmier_name', infirmierName);
       await _missionService.updateMissionField(
-          mission.id, 'priority', priority);
+          mission.id, 'priority', dbPriority);
 
       if (mounted) {
-        _loadMissions();
+        _applyMissionMutation(
+          mission.copyWith(
+            missionNumber: missionNumber,
+            missionDate: missionDate,
+            fromLocation: fromLocation,
+            toLocation: toLocation,
+            driverName: driverName,
+            infirmierName: infirmierName,
+            priority: dbPriority,
+          ),
+        );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mission mise à jour avec succès'),
@@ -1750,7 +1950,7 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
 
       if (mounted) {
         print('   📊 Reloading missions and showing success snackbar...');
-        _loadMissions();
+        _applyMissionMutation(mission.copyWith(status: newStatus));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -1797,9 +1997,11 @@ class _ManagerMissionsScreenState extends State<ManagerMissionsScreen>
         SupabaseConfig.missionsTable,
         mission.id,
       );
+      MissionListCache.instance.clear();
+      MissionPhiMemoryCache.single.remove(mission.id);
 
       if (mounted) {
-        _loadMissions();
+        _loadMissions(forceRefresh: true);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mission supprimée avec succès'),
@@ -1913,11 +2115,19 @@ class _ManagerMissionsScreenContentState
     extends State<ManagerMissionsScreenContent> with WidgetsBindingObserver {
   final MissionService _missionService = MissionService();
   final ApiClient _apiClient = ApiClient();
+  final AmbulanceService _ambulanceService = AmbulanceService();
   late Future<List<Mission>> _allMissionsFuture;
   String _selectedStatus = 'active';
   String _selectedAmbulanceFilter = ''; // Filter for historique tab
   Map<String, String> _ambulanceCache = {};
   bool _isProcessingTabChange = false;
+  List<Mission> _cachedMissions = [];
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
+
+  String _normalizeMissionPriorityForDb(String priority) {
+    final normalized = priority.trim().toLowerCase();
+    return normalized.isEmpty ? 'normal' : normalized;
+  }
 
   Future<List<dynamic>> _attachClinicNames(List<dynamic> missionRows) async {
     final clinicTenantIds = missionRows
@@ -1967,55 +2177,165 @@ class _ManagerMissionsScreenContentState
     super.initState();
     print('[DEBUG] ManagerMissionsScreenContent initState() called');
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _loadMissions();
     print(
         '[DEBUG] ManagerMissionsScreenContent: _loadMissions() called in initState');
 
     // 🔥 CRITICAL FIX: Reload after widget is fully built
     // This prevents lifecycle event race conditions when widget is recreated
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        print(
-            '[DEBUG] ManagerMissionsScreenContent: Post-frame callback fired');
-        debugPrint(
-            '[ManagerMissionsScreenContent] Post-frame callback: reloading missions');
-        _loadMissions();
-      }
-    });
   }
 
   @override
   void dispose() {
+    _realtimeSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && mounted) {
-      debugPrint(
-          '[ManagerMissionsScreenContent] App resumed, reloading missions...');
-      _loadMissions();
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
     }
   }
 
-  void _loadMissions() {
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 1) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
+      debugPrint(
+        '[ManagerMissionsScreenContent] Long resume, refreshing visible tab',
+      );
+      _loadMissions();
+    } else {
+      debugPrint(
+        '[ManagerMissionsScreenContent] Short resume, using cached data',
+      );
+    }
+  }
+
+  void _loadMissions({bool forceRefresh = false}) {
     if (mounted) {
       setState(() {
-        _allMissionsFuture = _getAllMissions();
+        _allMissionsFuture = _getAllMissions(forceRefresh: forceRefresh);
       });
     }
   }
 
-  Future<List<Mission>> _getAllMissions() async {
+  Future<Mission> _hydrateMissionForPhi(Mission mission) async {
     try {
-      final missionData = await _apiClient.get(SupabaseConfig.missionsTable);
-      final enrichedMissionData = await _attachClinicNames(missionData);
+      return await _missionService.hydrateMissionWithPrivateData(mission);
+    } catch (e) {
+      debugPrint(
+        '[ManagerMissionsScreenContent] Could not load private mission data for ${mission.id}: $e',
+      );
+      return mission;
+    }
+  }
+
+  Future<List<Mission>> _getAllMissions({bool forceRefresh = false}) async {
+    try {
+      final missions = await _missionService.getAllMissionsOperational(
+        forceRefresh: forceRefresh,
+      );
+      _cachedMissions = missions;
+      final enrichedMissionData =
+          missions.map((mission) => mission.toJson()).toList();
       _preloadAmbulanceNames(enrichedMissionData);
-      return enrichedMissionData.map((json) => Mission.fromJson(json)).toList();
+      return missions;
     } catch (e) {
       print('Error loading missions: $e');
       rethrow;
+    }
+  }
+
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+    if (event.type == RealtimeEventType.missionRefreshRequested) {
+      _loadMissions(forceRefresh: true);
+      return;
+    }
+    if (_cachedMissions.isEmpty) return;
+
+    final updated = List<Mission>.from(_cachedMissions);
+    switch (event.type) {
+      case RealtimeEventType.missionInserted:
+      case RealtimeEventType.missionUpdated:
+        final mission = event.mission;
+        if (mission == null) return;
+        final index = updated.indexWhere((item) => item.id == mission.id);
+        if (index == -1) {
+          updated.insert(0, mission);
+        } else {
+          updated[index] = mission;
+        }
+        break;
+      case RealtimeEventType.missionDeleted:
+        final missionId = event.recordId;
+        if (missionId == null) return;
+        updated.removeWhere((mission) => mission.id == missionId);
+        break;
+      case RealtimeEventType.missionRefreshRequested:
+        return;
+      case RealtimeEventType.ambulanceUpdated:
+        final ambulance = event.ambulance;
+        if (ambulance == null) return;
+        _ambulanceCache[ambulance.id] = ambulance.ambulanceNumber;
+        setState(() {});
+        return;
+    }
+
+    _cachedMissions = updated;
+    _preloadAmbulanceNames(updated.map((mission) => mission.toJson()).toList());
+    setState(() {
+      _allMissionsFuture = Future.value(List<Mission>.from(_cachedMissions));
+    });
+  }
+
+  void _applyMissionMutation(Mission mission) {
+    MissionListCache.instance.clear();
+
+    if (_cachedMissions.isEmpty) {
+      _loadMissions(forceRefresh: true);
+      return;
+    }
+
+    final updated = List<Mission>.from(_cachedMissions);
+    final index = updated.indexWhere((item) => item.id == mission.id);
+    if (index == -1) {
+      updated.insert(0, mission);
+    } else {
+      updated[index] = mission;
+    }
+
+    _cachedMissions = updated;
+    _preloadAmbulanceNames(updated.map((item) => item.toJson()).toList());
+    setState(() {
+      _allMissionsFuture = Future.value(List<Mission>.from(_cachedMissions));
+    });
+
+    unawaited(_refreshMissionsInBackground());
+  }
+
+  Future<void> _refreshMissionsInBackground() async {
+    try {
+      final missions = await _getAllMissions(forceRefresh: true);
+      if (!mounted) return;
+      setState(() {
+        _allMissionsFuture = Future.value(List<Mission>.from(missions));
+      });
+    } catch (e) {
+      debugPrint(
+        '[ManagerMissionsScreenContent] Background refresh failed: $e',
+      );
     }
   }
 
@@ -2034,14 +2354,22 @@ class _ManagerMissionsScreenContentState
 
   Future<void> _loadAmbulanceNames(List<String> ambulanceIds) async {
     try {
-      final ambulanceData =
-          await _apiClient.get(SupabaseConfig.ambulancesTable);
+      final ambulanceData = (await _ambulanceService.getAllAmbulances())
+          .map((ambulance) => ambulance.toJson())
+          .toList();
+      var cacheChanged = false;
       for (var amb in ambulanceData) {
         final id = amb['id'].toString();
-        final number = amb['ambulance_number'] as String?;
-        if (number != null) {
+        final number = amb['ambulance_number']?.toString().trim();
+        if (number != null &&
+            number.isNotEmpty &&
+            _ambulanceCache[id] != number) {
           _ambulanceCache[id] = number;
+          cacheChanged = true;
         }
+      }
+      if (cacheChanged && mounted) {
+        setState(() {});
       }
     } catch (e) {
       print('Error loading ambulance names: $e');
@@ -2049,13 +2377,13 @@ class _ManagerMissionsScreenContentState
   }
 
   String _getAmbulanceName(String ambulanceId) {
+    if (ambulanceId.trim().isEmpty) {
+      return 'Non assignée';
+    }
     if (_ambulanceCache.containsKey(ambulanceId)) {
       return _ambulanceCache[ambulanceId]!;
     }
-    final displayId = ambulanceId.length >= 4
-        ? ambulanceId.substring(0, 4).toUpperCase()
-        : ambulanceId.toUpperCase();
-    return 'AMB-$displayId';
+    return 'Chargement...';
   }
 
   Future<String> _generateMissionNumber() async {
@@ -2495,11 +2823,30 @@ class _ManagerMissionsScreenContentState
     final toLocationCtrl = TextEditingController(text: mission.toLocation);
     final infirmierNameCtrl =
         TextEditingController(text: mission.infirmierName ?? '');
-    String selectedPriority = mission.priority;
+    final priorityOptions = {
+      for (final priority in LocationData.priorityOptions)
+        priority.toLowerCase().trim(): priority,
+    }.values.toList();
+    final normalizedMissionPriority = mission.priority.toLowerCase().trim();
+    final hasKnownPriority = priorityOptions.any(
+      (priority) => priority.toLowerCase().trim() == normalizedMissionPriority,
+    );
+    String selectedPriority = priorityOptions.firstWhere(
+      (priority) =>
+          priority.toLowerCase().trim() ==
+          normalizedMissionPriority,
+      orElse: () => 'autre',
+    );
+    final customPriorityCtrl = TextEditingController(
+      text: hasKnownPriority || normalizedMissionPriority == 'autre'
+          ? ''
+          : mission.priority,
+    );
 
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
         title: const Text('Modifier la Mission'),
         content: SingleChildScrollView(
           child: Form(
@@ -2550,7 +2897,7 @@ class _ManagerMissionsScreenContentState
                     labelText: 'Priorité',
                     border: OutlineInputBorder(),
                   ),
-                  items: LocationData.priorityOptions.map((priority) {
+                  items: priorityOptions.map((priority) {
                     return DropdownMenuItem(
                       value: priority,
                       child:
@@ -2558,9 +2905,28 @@ class _ManagerMissionsScreenContentState
                     );
                   }).toList(),
                   onChanged: (value) {
-                    if (value != null) selectedPriority = value;
+                    if (value == null) return;
+                    setDialogState(() => selectedPriority = value);
                   },
                 ),
+                if (selectedPriority.toLowerCase().trim() == 'autre') ...[
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: customPriorityCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Priorité personnalisée',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) {
+                      if (selectedPriority.toLowerCase().trim() != 'autre') {
+                        return null;
+                      }
+                      return value?.trim().isEmpty ?? true
+                          ? 'Entrez une priorité'
+                          : null;
+                    },
+                  ),
+                ],
               ],
             ),
           ),
@@ -2573,14 +2939,18 @@ class _ManagerMissionsScreenContentState
           ElevatedButton(
             onPressed: () {
               if (formKey.currentState?.validate() ?? false) {
+                final priorityToSave =
+                    selectedPriority.toLowerCase().trim() == 'autre'
+                        ? customPriorityCtrl.text.trim()
+                        : selectedPriority;
                 Navigator.pop(dialogContext);
                 _updateMissionWrapper(
-                  mission.id,
+                  mission,
                   missionNumberCtrl.text,
                   fromLocationCtrl.text,
                   toLocationCtrl.text,
                   infirmierNameCtrl.text,
-                  selectedPriority,
+                  priorityToSave,
                 );
               }
             },
@@ -2590,12 +2960,13 @@ class _ManagerMissionsScreenContentState
             child: const Text('Enregistrer'),
           ),
         ],
+        ),
       ),
     );
   }
 
   Future<void> _updateMissionWrapper(
-    String missionId,
+    Mission mission,
     String missionNumber,
     String fromLocation,
     String toLocation,
@@ -2603,19 +2974,28 @@ class _ManagerMissionsScreenContentState
     String priority,
   ) async {
     try {
+      final dbPriority = _normalizeMissionPriorityForDb(priority);
       await _apiClient.patch(
-        '${SupabaseConfig.missionsTable}?id=eq.$missionId',
+        '${SupabaseConfig.missionsTable}?id=eq.${mission.id}',
         {
           'mission_number': missionNumber,
           'from_location': fromLocation,
           'to_location': toLocation,
           'infirmier_name': infirmierName,
-          'priority': priority,
+          'priority': dbPriority,
         },
       );
 
       if (mounted) {
-        _loadMissions();
+        _applyMissionMutation(
+          mission.copyWith(
+            missionNumber: missionNumber,
+            fromLocation: fromLocation,
+            toLocation: toLocation,
+            infirmierName: infirmierName,
+            priority: dbPriority,
+          ),
+        );
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mission mise à jour avec succès'),
@@ -2649,7 +3029,7 @@ class _ManagerMissionsScreenContentState
           ElevatedButton(
             onPressed: () {
               Navigator.pop(dialogContext);
-              _updateMissionStatus(mission.id, 'completed');
+              _updateMissionStatus(mission, 'completed');
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.green,
@@ -2659,7 +3039,7 @@ class _ManagerMissionsScreenContentState
           ElevatedButton(
             onPressed: () {
               Navigator.pop(dialogContext);
-              _updateMissionStatus(mission.id, 'cancelled');
+              _updateMissionStatus(mission, 'cancelled');
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
@@ -2671,21 +3051,21 @@ class _ManagerMissionsScreenContentState
     );
   }
 
-  Future<void> _updateMissionStatus(String missionId, String newStatus) async {
+  Future<void> _updateMissionStatus(Mission mission, String newStatus) async {
     try {
       print('\n🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄');
       print('🔄 [Dashboard] UPDATING MISSION STATUS');
-      print('🔄 Mission ID: $missionId');
+      print('🔄 Mission ID: ${mission.id}');
       print('🔄 New Status: $newStatus');
       print('🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄🔄\n');
 
       print('   🔗 Calling _missionService.updateMissionStatus()...');
-      await _missionService.updateMissionStatus(missionId, newStatus);
+      await _missionService.updateMissionStatus(mission.id, newStatus);
       print('   ✅ MissionService returned successfully');
 
       if (mounted) {
         print('   📊 Reloading missions and showing success snackbar...');
-        _loadMissions();
+        _applyMissionMutation(mission.copyWith(status: newStatus));
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -2744,9 +3124,11 @@ class _ManagerMissionsScreenContentState
   Future<void> _deleteMissionWrapper(String missionId) async {
     try {
       await _apiClient.delete(SupabaseConfig.missionsTable, missionId);
+      MissionListCache.instance.clear();
+      MissionPhiMemoryCache.single.remove(missionId);
 
       if (mounted) {
-        _loadMissions();
+        _loadMissions(forceRefresh: true);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Mission supprimée avec succès'),
@@ -2879,7 +3261,7 @@ class _ManagerMissionsScreenContentState
         Expanded(
           child: RefreshIndicator(
             onRefresh: () {
-              _loadMissions();
+              _loadMissions(forceRefresh: true);
               return _allMissionsFuture;
             },
             child: FutureBuilder<List<Mission>>(
@@ -2917,6 +3299,7 @@ class _ManagerMissionsScreenContentState
                 }
 
                 final allMissions = snapshot.data ?? [];
+                _cachedMissions = allMissions;
                 final filteredMissions = allMissions
                     .where((mission) => mission.status == _selectedStatus)
                     .toList()
@@ -3245,7 +3628,11 @@ class _ManagerMissionsScreenContentState
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () => _showEditMissionDialog(mission),
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _showEditMissionDialog(hydrated);
+                  },
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Modifier'),
                   style: OutlinedButton.styleFrom(
@@ -3283,39 +3670,45 @@ class _ManagerMissionsScreenContentState
                 ),
             ],
           ),
-          // Facture and Imprimer buttons for completed/cancelled missions
-          if (!isActive) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _generateMissionPDF(context, mission),
-                    icon: const Icon(Icons.print, size: 16),
-                    label: const Text('Imprimer'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
+          // Facture and fiche technique are available for every mission status.
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _generateMissionPDF(context, hydrated);
+                  },
+                  icon: const Icon(Icons.print, size: 16),
+                  label: const Text('Imprimer'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _generateInvoice(context, mission),
-                    icon: const Icon(Icons.receipt, size: 16),
-                    label: const Text('Facture'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.orange,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final hydrated = await _hydrateMissionForPhi(mission);
+                    if (!mounted) return;
+                    _generateInvoice(context, hydrated);
+                  },
+                  icon: const Icon(Icons.receipt, size: 16),
+                  label: const Text('Facture'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
                   ),
                 ),
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ],
       ),
     );

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class JWTHelper {
@@ -10,8 +11,43 @@ class JWTHelper {
 
   /// Get tenant_id from JWT
   static Future<String?> getTenantId() async {
-    final session = Supabase.instance.client.auth.currentSession;
-    return session?.user.userMetadata?['tenant_id'] as String?;
+    try {
+      final session = Supabase.instance.client.auth.currentSession;
+      final userMetadataTenant =
+          session?.user.userMetadata?['tenant_id']?.toString().trim();
+      if (userMetadataTenant != null && userMetadataTenant.isNotEmpty) {
+        return userMetadataTenant;
+      }
+
+      final appMetadataTenant =
+          session?.user.appMetadata['tenant_id']?.toString().trim();
+      if (appMetadataTenant != null && appMetadataTenant.isNotEmpty) {
+        return appMetadataTenant;
+      }
+    } catch (e) {
+      debugPrint('[JWTHelper] Supabase tenant lookup failed: $e');
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawUser = prefs.getString('cached_user');
+      if (rawUser == null || rawUser.isEmpty) {
+        return null;
+      }
+      final decoded = jsonDecode(rawUser);
+      if (decoded is Map) {
+        final tenantId = (decoded['tenantId'] ?? decoded['tenant_id'])
+            ?.toString()
+            .trim();
+        if (tenantId != null && tenantId.isNotEmpty) {
+          return tenantId;
+        }
+      }
+    } catch (e) {
+      debugPrint('[JWTHelper] Cached tenant lookup failed: $e');
+    }
+
+    return null;
   }
 
   /// Get user role from JWT
@@ -34,7 +70,7 @@ class JWTHelper {
   /// Check if user is manager or admin
   static Future<bool> isManager() async {
     final role = await getRole();
-    return role == 'manager' || role == 'admin';
+    return role == 'manager' || role == 'owner' || role == 'admin';
   }
 
   /// Check if user is admin

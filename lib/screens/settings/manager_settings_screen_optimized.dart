@@ -44,10 +44,16 @@ class _ManagerSettingsScreenOptimizedState
   bool _isBusy = false;
 
   List<User> _drivers = const [];
+  List<User> _managers = const [];
   List<Ambulance> _ambulances = const [];
   List<MaintenanceRule> _maintenanceRules = const [];
 
   String get _tenantId => widget.user.tenantId ?? '';
+
+  bool get _canManageManagers {
+    final role = widget.user.role?.trim().toLowerCase();
+    return role == 'owner' || role == 'admin' || role == 'super_admin';
+  }
 
   @override
   void initState() {
@@ -77,6 +83,7 @@ class _ManagerSettingsScreenOptimizedState
       final results = await Future.wait([
         _managerOnboardingService.getOnboardingState(),
         _companyStaffService.getCompanyDrivers(_tenantId),
+        _companyStaffService.getCompanyStaff(_tenantId),
         _apiClient.get(
           SupabaseConfig.ambulancesTable,
           filters: {'tenant_id': 'eq.$_tenantId'},
@@ -86,8 +93,9 @@ class _ManagerSettingsScreenOptimizedState
 
       final onboardingState = results[0] as Map<String, dynamic>;
       final drivers = results[1] as List<User>;
-      final ambulanceRows = results[2] as List<Map<String, dynamic>>;
-      final maintenanceRules = results[3] as List<MaintenanceRule>;
+      final staff = results[2] as List<User>;
+      final ambulanceRows = results[3] as List<Map<String, dynamic>>;
+      final maintenanceRules = results[4] as List<MaintenanceRule>;
 
       final tenant = onboardingState['tenant'] is Map<String, dynamic>
           ? Map<String, dynamic>.from(
@@ -97,8 +105,12 @@ class _ManagerSettingsScreenOptimizedState
           ? Map<String, dynamic>.from(onboardingState['tenant'] as Map)
           : null;
       final ambulances = ambulanceRows.map(Ambulance.fromJson).toList();
+      final managers = staff
+          .where((member) => member.role?.trim().toLowerCase() == 'manager')
+          .toList();
 
       _drivers = drivers;
+      _managers = managers;
       _ambulances = ambulances;
       _maintenanceRules = maintenanceRules;
       _hydrateCompanyControllers(tenant);
@@ -157,20 +169,13 @@ class _ManagerSettingsScreenOptimizedState
     String key,
   ) {
     final raw = metadata[key];
+    final values = <String>[];
     if (raw is List) {
-      return raw
-          .map((item) => item?.toString().trim() ?? '')
-          .where((item) => item.isNotEmpty)
-          .toList();
+      values.addAll(raw.map((item) => item?.toString().trim() ?? ''));
+    } else if (raw is String && raw.trim().isNotEmpty) {
+      values.addAll(raw.split(RegExp(r'[\n,;]+')).map((item) => item.trim()));
     }
-    if (raw is String && raw.trim().isNotEmpty) {
-      return raw
-          .split(RegExp(r'[\n,;]+'))
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty)
-          .toList();
-    }
-    return const [];
+    return values.where((item) => item.isNotEmpty).toSet().toList();
   }
 
   String _readMetadataString(Map<String, dynamic> metadata, String key) {
@@ -222,6 +227,159 @@ class _ManagerSettingsScreenOptimizedState
         setState(() => _isSavingCompany = false);
       }
     }
+  }
+
+  Future<void> _showManagerDialog({User? manager}) async {
+    final isEdit = manager != null;
+    final nameController = TextEditingController(text: manager?.name ?? '');
+    final emailController = TextEditingController(text: manager?.email ?? '');
+    final passwordController = TextEditingController();
+    final phoneController = TextEditingController();
+    bool obscurePassword = true;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text(isEdit ? 'Modifier le manager' : 'Ajouter un manager'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Nom complet',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'Email',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: phoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Telephone (optionnel)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: passwordController,
+                      obscureText: obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: isEdit
+                            ? 'Nouveau mot de passe'
+                            : 'Mot de passe',
+                        hintText: isEdit
+                            ? 'Laisser vide pour garder le mot de passe actuel'
+                            : null,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setDialogState(() {
+                              obscurePassword = !obscurePassword;
+                            });
+                          },
+                          icon: Icon(
+                            obscurePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Annuler'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final name = nameController.text.trim();
+                    final email = emailController.text.trim();
+                    final password = passwordController.text.trim();
+                    final phone = phoneController.text.trim();
+
+                    if (name.isEmpty || email.isEmpty) {
+                      _showSnackBar('Nom et email sont obligatoires.');
+                      return;
+                    }
+
+                    if (!isEdit && password.isEmpty) {
+                      _showSnackBar(
+                        'Nom, email et mot de passe sont obligatoires.',
+                      );
+                      return;
+                    }
+
+                    if (password.isNotEmpty && password.length < 8) {
+                      _showSnackBar(
+                        'Le mot de passe doit contenir au moins 8 caracteres.',
+                      );
+                      return;
+                    }
+
+                    Navigator.of(context).pop();
+
+                    try {
+                      setState(() => _isBusy = true);
+                      if (isEdit) {
+                        await _managerOnboardingService.updateManager(
+                          managerId: manager.id,
+                          managerName: name,
+                          managerEmail: email,
+                        );
+                        if (password.isNotEmpty) {
+                          await _managerOnboardingService
+                              .updateCompanyUserPassword(
+                            userId: manager.id,
+                            newPassword: password,
+                          );
+                        }
+                      } else {
+                        await _managerOnboardingService.addManager(
+                          managerName: name,
+                          managerEmail: email,
+                          managerPassword: password,
+                          managerPhone: phone.isEmpty ? null : phone,
+                        );
+                      }
+                      await _loadData();
+                      _showSnackBar(
+                        isEdit
+                            ? 'Manager mis a jour.'
+                            : 'Manager cree avec succes.',
+                      );
+                    } catch (e) {
+                      _showSnackBar('Erreur manager: $e');
+                    } finally {
+                      if (mounted) {
+                        setState(() => _isBusy = false);
+                      }
+                    }
+                  },
+                  child: Text(isEdit ? 'Enregistrer' : 'Creer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _showDriverDialog({User? driver}) async {
@@ -358,6 +516,94 @@ class _ManagerSettingsScreenOptimizedState
     );
   }
 
+  Future<void> _showPasswordDialog(User targetUser) async {
+    final passwordController = TextEditingController();
+    bool obscurePassword = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Mot de passe - ${targetUser.name}'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Le mot de passe actuel ne peut pas etre affiche pour des raisons de securite. Vous pouvez seulement le remplacer.',
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: passwordController,
+                      obscureText: obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: 'Nouveau mot de passe',
+                        hintText: 'Minimum 8 caracteres',
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setDialogState(() {
+                              obscurePassword = !obscurePassword;
+                            });
+                          },
+                          icon: Icon(
+                            obscurePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Annuler'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: () async {
+                    final password = passwordController.text.trim();
+                    if (password.length < 8) {
+                      _showSnackBar(
+                        'Le mot de passe doit contenir au moins 8 caracteres.',
+                      );
+                      return;
+                    }
+
+                    Navigator.of(context).pop();
+
+                    try {
+                      setState(() => _isBusy = true);
+                      await _managerOnboardingService.updateCompanyUserPassword(
+                        userId: targetUser.id,
+                        newPassword: password,
+                      );
+                      await _loadData();
+                      _showSnackBar('Mot de passe mis a jour.');
+                    } catch (e) {
+                      _showSnackBar('Erreur mot de passe: $e');
+                    } finally {
+                      if (mounted) {
+                        setState(() => _isBusy = false);
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.lock_reset_outlined),
+                  label: const Text('Changer'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _deleteDriver(User driver) async {
     final confirmed = await _showDeleteConfirmation(
       title: 'Supprimer ce chauffeur ?',
@@ -379,6 +625,27 @@ class _ManagerSettingsScreenOptimizedState
     }
   }
 
+  Future<void> _deleteManager(User manager) async {
+    final confirmed = await _showDeleteConfirmation(
+      title: 'Supprimer ce manager ?',
+      message: manager.name,
+    );
+    if (!confirmed) return;
+
+    try {
+      setState(() => _isBusy = true);
+      await _managerOnboardingService.deleteManager(managerId: manager.id);
+      await _loadData();
+      _showSnackBar('Manager supprime.');
+    } catch (e) {
+      _showSnackBar('Erreur suppression manager: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isBusy = false);
+      }
+    }
+  }
+
   Future<void> _showAmbulanceDialog({Ambulance? ambulance}) async {
     final isEdit = ambulance != null;
     final numberController = TextEditingController(
@@ -386,6 +653,11 @@ class _ManagerSettingsScreenOptimizedState
     );
     final phoneController = TextEditingController(
       text: ambulance?.telephone ?? '',
+    );
+    final kilometrageController = TextEditingController(
+      text: ambulance?.kilometrage != null
+          ? ambulance!.kilometrage!.toStringAsFixed(0)
+          : '',
     );
 
     await showDialog<void>(
@@ -412,6 +684,18 @@ class _ManagerSettingsScreenOptimizedState
                   border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: kilometrageController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Kilometrage',
+                  suffixText: 'km',
+                  border: OutlineInputBorder(),
+                ),
+              ),
             ],
           ),
         ),
@@ -424,6 +708,7 @@ class _ManagerSettingsScreenOptimizedState
             onPressed: () async {
               final ambulanceNumber = numberController.text.trim();
               final telephone = phoneController.text.trim();
+              final kilometrage = kilometrageController.text.trim();
 
               if (ambulanceNumber.isEmpty) {
                 _showSnackBar('Le numéro de l’ambulance est obligatoire.');
@@ -439,11 +724,13 @@ class _ManagerSettingsScreenOptimizedState
                     ambulanceId: ambulance.id,
                     ambulanceNumber: ambulanceNumber,
                     telephone: telephone,
+                    kilometrage: kilometrage,
                   );
                 } else {
                   await _managerOnboardingService.addAmbulance(
                     ambulanceNumber: ambulanceNumber,
                     telephone: telephone,
+                    kilometrage: kilometrage,
                   );
                 }
 
@@ -802,6 +1089,10 @@ class _ManagerSettingsScreenOptimizedState
               children: [
                 _buildCompanySection(),
                 const SizedBox(height: 16),
+                if (_canManageManagers) ...[
+                  _buildManagersSection(),
+                  const SizedBox(height: 16),
+                ],
                 _buildDriversSection(),
                 const SizedBox(height: 16),
                 _buildAmbulancesSection(),
@@ -859,7 +1150,7 @@ class _ManagerSettingsScreenOptimizedState
             controller: _companyPhonesController,
             minLines: 2,
             maxLines: 4,
-            keyboardType: TextInputType.phone,
+            keyboardType: TextInputType.multiline,
             decoration: const InputDecoration(
               labelText: 'Téléphones',
               hintText: 'Un numéro par ligne',
@@ -888,6 +1179,35 @@ class _ManagerSettingsScreenOptimizedState
     );
   }
 
+  Widget _buildManagersSection() {
+    return _buildSectionCard(
+      title: 'Gestion des utilisateurs',
+      subtitle:
+          'Le proprietaire peut voir et changer les mots de passe des utilisateurs de la societe.',
+      trailing: ElevatedButton.icon(
+        onPressed: () => _showManagerDialog(),
+        icon: const Icon(Icons.manage_accounts_outlined),
+        label: const Text('Ajouter'),
+      ),
+      child: _managers.isEmpty
+          ? const _EmptySectionMessage(message: 'Aucun manager trouve.')
+          : Column(
+              children: _managers
+                  .map(
+                    (manager) => _SimpleListTileCard(
+                      title: manager.name,
+                      subtitle: manager.email,
+                      extra: _formatRoleLabel(manager.roleLabel ?? manager.role),
+                      onEdit: () => _showManagerDialog(manager: manager),
+                      onPassword: () => _showPasswordDialog(manager),
+                      onDelete: () => _deleteManager(manager),
+                    ),
+                  )
+                  .toList(),
+            ),
+    );
+  }
+
   Widget _buildDriversSection() {
     return _buildSectionCard(
       title: 'Gestion des chauffeurs',
@@ -907,6 +1227,7 @@ class _ManagerSettingsScreenOptimizedState
                       subtitle: driver.email,
                       extra: _formatRoleLabel(driver.roleLabel ?? driver.role),
                       onEdit: () => _showDriverDialog(driver: driver),
+                      onPassword: () => _showPasswordDialog(driver),
                       onDelete: () => _deleteDriver(driver),
                     ),
                   )
@@ -1058,6 +1379,7 @@ class _SimpleListTileCard extends StatelessWidget {
   final String subtitle;
   final String? extra;
   final VoidCallback onEdit;
+  final VoidCallback? onPassword;
   final VoidCallback onDelete;
 
   const _SimpleListTileCard({
@@ -1066,6 +1388,7 @@ class _SimpleListTileCard extends StatelessWidget {
     required this.onEdit,
     required this.onDelete,
     this.extra,
+    this.onPassword,
   });
 
   @override
@@ -1116,11 +1439,91 @@ class _SimpleListTileCard extends StatelessWidget {
             ),
           ),
           IconButton(onPressed: onEdit, icon: const Icon(Icons.edit_outlined)),
+          if (onPassword != null)
+            IconButton(
+              onPressed: onPassword,
+              icon: const Icon(Icons.lock_reset_outlined),
+              tooltip: 'Changer le mot de passe',
+            ),
           IconButton(
             onPressed: onDelete,
             icon: const Icon(Icons.delete_outline),
             color: AppColors.error,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SimpleReadOnlyListTileCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final String? extra;
+  final VoidCallback? onPassword;
+
+  const _SimpleReadOnlyListTileCard({
+    required this.title,
+    required this.subtitle,
+    this.extra,
+    this.onPassword,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.person_outline, color: AppColors.primary),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                if (extra != null && extra!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    extra!,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (onPassword != null)
+            IconButton(
+              onPressed: onPassword,
+              icon: const Icon(Icons.lock_reset_outlined),
+              tooltip: 'Changer le mot de passe',
+            ),
         ],
       ),
     );

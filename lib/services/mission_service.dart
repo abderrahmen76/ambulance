@@ -6,8 +6,10 @@ import 'dart:convert';
 import '../config/constants.dart';
 import '../models/mission_model.dart';
 import 'api_client.dart';
+import 'app_memory_cache_service.dart';
 import 'jwt_helper.dart';
 import 'mission_private_service.dart';
+import 'performance_log_service.dart';
 import 'session_security_service.dart';
 
 /// Mission Service
@@ -28,6 +30,11 @@ class MissionService {
   }
 
   MissionService._internal();
+
+  void _invalidateMissionCaches() {
+    MissionListCache.instance.clear();
+    MissionPhiMemoryCache.single.clear();
+  }
 
   Map<String, String> _buildFunctionHeaders() {
     throw UnimplementedError(
@@ -96,22 +103,42 @@ class MissionService {
     return Mission.fromJson(mergedJson);
   }
 
+  Future<List<Mission>> _buildOperationalMissionList(
+    List<dynamic> missionRows,
+  ) async {
+    final trace = PerformanceLog.start(
+      'missions parse operational',
+      meta: {'rows': missionRows.length},
+    );
+    final enrichedMissions = await _attachClinicNames(missionRows);
+    trace.checkpoint('clinic_names_attached');
+    final missions = enrichedMissions
+        .map((json) => Mission.fromJson(json))
+        .toList();
+    trace.checkpoint('missions_parsed', meta: {'count': missions.length});
+    trace.end(meta: {'count': missions.length});
+    return missions;
+  }
+
   Future<List<Mission>> _buildMissionListWithPrivateData(
     List<dynamic> missionRows,
   ) async {
-    final enrichedMissions = await _attachClinicNames(missionRows);
-    final missions = enrichedMissions.map((json) => Mission.fromJson(json)).toList();
+    final trace = PerformanceLog.start(
+      'missions parse + private merge',
+      meta: {'rows': missionRows.length},
+    );
+    final missions = await _buildOperationalMissionList(missionRows);
 
     if (missions.isEmpty) {
+      trace.end(meta: {'count': 0});
       return missions;
     }
 
     try {
-      final privateByMissionId = await _missionPrivateService.getManyMissionPrivateData(
-        missions.map((mission) => mission.id),
-      );
+      final privateByMissionId = await _missionPrivateService
+          .getManyMissionPrivateData(missions.map((mission) => mission.id));
 
-      return missions
+      final mergedMissions = missions
           .map(
             (mission) => _mergeMissionWithPrivatePayload(
               mission,
@@ -119,12 +146,77 @@ class MissionService {
             ),
           )
           .toList();
+      trace.end(meta: {'count': missions.length, 'private_merge': true});
+      return mergedMissions;
     } catch (e) {
       debugPrint(
         '[MissionService] Warning: private mission payload merge failed, falling back to base mission rows: $e',
       );
+      trace.end(meta: {'count': missions.length, 'private_merge': false});
       return missions;
     }
+  }
+
+  Future<List<Mission>> getAllMissionsWithPrivateData() async {
+    final trace = PerformanceLog.start('missions fetch');
+    try {
+      final missionRows = await _apiClient.get(SupabaseConfig.missionsTable);
+      trace.checkpoint('rest_returned', meta: {'rows': missionRows.length});
+      final missions = await _buildMissionListWithPrivateData(missionRows);
+      trace.end(meta: {'missions': missions.length});
+      return missions;
+    } catch (e) {
+      trace.end(meta: {'error': e.runtimeType});
+      rethrow;
+    }
+  }
+
+  Future<List<Mission>> getAllMissionsOperational({
+    bool forceRefresh = false,
+  }) async {
+    final trace = PerformanceLog.start('missions fetch operational');
+    const cacheKey = 'all_operational';
+    try {
+      final cachedRows =
+          forceRefresh ? null : MissionListCache.instance.get(cacheKey);
+      final missionRows =
+          cachedRows ?? await _apiClient.get(SupabaseConfig.missionsTable);
+      MissionListCache.instance.set(cacheKey, missionRows);
+      trace.checkpoint('rest_returned', meta: {'rows': missionRows.length});
+      final missions = await _buildOperationalMissionList(missionRows);
+      trace.end(meta: {'missions': missions.length});
+      return missions;
+    } catch (e) {
+      trace.end(meta: {'error': e.runtimeType});
+      rethrow;
+    }
+  }
+
+  Future<Mission> hydrateMissionWithPrivateData(Mission mission) async {
+    final privatePayload =
+        await _missionPrivateService.getMissionPrivateData(mission.id);
+    return _mergeMissionWithPrivatePayload(mission, privatePayload);
+  }
+
+  Future<List<Mission>> hydrateMissionsWithPrivateData(
+    Iterable<Mission> missions,
+  ) async {
+    final missionList = missions.toList();
+    if (missionList.isEmpty) {
+      return missionList;
+    }
+
+    final privateByMissionId = await _missionPrivateService
+        .getManyMissionPrivateData(missionList.map((mission) => mission.id));
+
+    return missionList
+        .map(
+          (mission) => _mergeMissionWithPrivatePayload(
+            mission,
+            privateByMissionId[mission.id] ?? const <String, dynamic>{},
+          ),
+        )
+        .toList();
   }
 
   Future<String?> _getCurrentTenantId() async {
@@ -176,6 +268,8 @@ class MissionService {
       '${SupabaseConfig.ambulancesTable}?id=eq.$ambulanceId',
       payload,
     );
+    AmbulanceCache.list.clear();
+    AmbulanceCache.byId.remove(ambulanceId);
   }
 
   Future<List<String>> _getLinkedClinicTenantIds(String providerTenantId) async {
@@ -448,7 +542,15 @@ class MissionService {
     }
 
   /// Get available missions (not yet assigned)
-  Future<List<Mission>> getAvailableMissions(String ambulanceId) async {
+  Future<List<Mission>> getAvailableMissions(
+    String ambulanceId, {
+    bool forceRefresh = false,
+  }) async {
+    final trace = PerformanceLog.start(
+      'missions fetch',
+      meta: {'scope': 'available', 'ambulance_id': ambulanceId},
+    );
+    final cacheKey = 'available:$ambulanceId';
     try {
       final tenantId = await _getCurrentTenantId();
       final filters = <String, dynamic>{
@@ -478,58 +580,113 @@ class MissionService {
             '(broadcast_ambulance_ids.cs.{$ambulanceId},assigned_ambulance_id.eq.$ambulanceId,ambulance_id.eq.$ambulanceId)';
       }
 
-      final missions = await _apiClient.get(
-        SupabaseConfig.missionsTable,
-        filters: filters,
-        orderBy: 'mission_date.desc',
-        limit: 100,
-      );
+      final cachedRows =
+          forceRefresh ? null : MissionListCache.instance.get(cacheKey);
+      final missions = cachedRows ??
+          await _apiClient.get(
+            SupabaseConfig.missionsTable,
+            filters: filters,
+            orderBy: 'mission_date.desc',
+            limit: 100,
+          );
+      MissionListCache.instance.set(cacheKey, missions);
+      trace.checkpoint('rest_returned', meta: {'rows': missions.length});
 
-      return _buildMissionListWithPrivateData(missions);
+      final result = await _buildOperationalMissionList(missions);
+      trace.end(meta: {'missions': result.length});
+      return result;
     } catch (e) {
+      trace.end(meta: {'error': e.runtimeType});
       rethrow;
     }
   }
 
   /// Get active missions for current driver
-  Future<List<Mission>> getActiveMissions(String ambulanceId) async {
+  Future<List<Mission>> getActiveMissions(
+    String ambulanceId, {
+    bool forceRefresh = false,
+  }) async {
+    final trace = PerformanceLog.start(
+      'missions fetch',
+      meta: {'scope': 'active', 'ambulance_id': ambulanceId},
+    );
+    final cacheKey = 'active:$ambulanceId';
     try {
-      final missions = await _apiClient.get(
-        SupabaseConfig.missionsTable,
-        filters: {
-          'or':
-              '(ambulance_id.eq.$ambulanceId,assigned_ambulance_id.eq.$ambulanceId)',
-          'status': 'eq.active',
-        },
-        orderBy: 'mission_date.desc',
-        limit: 100,
-      );
+      final cachedRows =
+          forceRefresh ? null : MissionListCache.instance.get(cacheKey);
+      final missions = cachedRows ??
+          await _apiClient.get(
+            SupabaseConfig.missionsTable,
+            filters: {
+              'or':
+                  '(ambulance_id.eq.$ambulanceId,assigned_ambulance_id.eq.$ambulanceId)',
+              'status': 'eq.active',
+            },
+            orderBy: 'mission_date.desc',
+            limit: 100,
+          );
+      MissionListCache.instance.set(cacheKey, missions);
+      trace.checkpoint('rest_returned', meta: {'rows': missions.length});
 
-      return _buildMissionListWithPrivateData(missions);
+      final result = await _buildOperationalMissionList(missions);
+      trace.end(meta: {'missions': result.length});
+      return result;
     } catch (e) {
+      trace.end(meta: {'error': e.runtimeType});
       rethrow;
     }
   }
 
   /// Get all missions for ambulance
-  Future<List<Mission>> getMissionsForAmbulance(String ambulanceId) async {
+  Future<List<Mission>> getMissionsForAmbulance(
+    String ambulanceId, {
+    bool forceRefresh = false,
+  }) async {
+    final cacheKey = 'ambulance:$ambulanceId';
     try {
       debugPrint(
           '[MissionService] Fetching all missions for ambulance: $ambulanceId');
+      final cachedRows =
+          forceRefresh ? null : MissionListCache.instance.get(cacheKey);
+      final missions = cachedRows ??
+          await _apiClient.get(
+            SupabaseConfig.missionsTable,
+            filters: {
+              'or':
+                  '(ambulance_id.eq.$ambulanceId,assigned_ambulance_id.eq.$ambulanceId)',
+            },
+            orderBy: 'mission_date.desc',
+            limit: 200,
+          );
+      MissionListCache.instance.set(cacheKey, missions);
+
+      debugPrint('[MissionService] Fetched ${missions.length} missions');
+      return _buildOperationalMissionList(missions);
+    } catch (e) {
+      debugPrint('[MissionService] ERROR fetching missions: $e');
+      rethrow;
+    }
+  }
+
+  /// Get a single mission by ID
+  Future<Mission?> getMissionByIdOperational(String missionId) async {
+    try {
+      debugPrint('[MissionService] Fetching operational mission: $missionId');
       final missions = await _apiClient.get(
         SupabaseConfig.missionsTable,
         filters: {
-          'or':
-              '(ambulance_id.eq.$ambulanceId,assigned_ambulance_id.eq.$ambulanceId)',
+          'id': 'eq.$missionId',
         },
-        orderBy: 'mission_date.desc',
-        limit: 200,
       );
 
-      debugPrint('[MissionService] Fetched ${missions.length} missions');
-      return _buildMissionListWithPrivateData(missions);
+      if (missions.isNotEmpty) {
+        debugPrint('[MissionService] Operational mission found');
+        return Mission.fromJson(missions.first);
+      }
+      debugPrint('[MissionService] Operational mission not found');
+      return null;
     } catch (e) {
-      debugPrint('[MissionService] ERROR fetching missions: $e');
+      debugPrint('[MissionService] ERROR fetching operational mission: $e');
       rethrow;
     }
   }
@@ -549,9 +706,7 @@ class MissionService {
         debugPrint('[MissionService] Mission found');
         final mission = Mission.fromJson(missions.first);
         try {
-          final privatePayload =
-              await _missionPrivateService.getMissionPrivateData(missionId);
-          return _mergeMissionWithPrivatePayload(mission, privatePayload);
+          return await hydrateMissionWithPrivateData(mission);
         } catch (e) {
           debugPrint(
             '[MissionService] Warning: could not merge private mission payload for mission $missionId: $e',
@@ -623,6 +778,7 @@ class MissionService {
       print('[MissionService] 4️⃣ Calling PATCH endpoint: $endpoint');
 
         final response = await _apiClient.patch(endpoint, updatePayload);
+        _invalidateMissionCaches();
 
       print('[MissionService] 5️⃣ PATCH response received:');
       print('   Type: ${response.runtimeType}');
@@ -727,6 +883,8 @@ class MissionService {
           '   endpoint: ${SupabaseConfig.missionsTable}?id=eq.$missionId');
 
       final missionContext = await _getMissionReservationContext(missionId);
+      final missionNumber =
+          missionContext?['mission_number']?.toString().trim();
       final reservedAmbulanceId =
           missionContext?['assigned_ambulance_id']?.toString() ??
               missionContext?['ambulance_id']?.toString();
@@ -735,6 +893,7 @@ class MissionService {
         '${SupabaseConfig.missionsTable}?id=eq.$missionId',
         payload,
       );
+      _invalidateMissionCaches();
 
       if (status == 'completed') {
         _sessionSecurityService.clearSensitiveAccessWindow();
@@ -757,6 +916,7 @@ class MissionService {
             'end_time': completionTime,
           },
         );
+        _invalidateMissionCaches();
       }
 
       if (reservedAmbulanceId != null && reservedAmbulanceId.isNotEmpty) {
@@ -777,7 +937,13 @@ class MissionService {
       // Send mission status update notification (fire and forget)
       print('   🚀 QUEUING BACKGROUND NOTIFICATION for status change');
       unawaited(
-        _notifyMissionStatusUpdate(missionId, status).catchError((e) {
+        _notifyMissionStatusUpdate(
+          missionId,
+          status,
+          missionNumber: missionNumber != null && missionNumber.isNotEmpty
+              ? missionNumber
+              : missionId,
+        ).catchError((e) {
           print(
               '❌ [MissionService] BACKGROUND ERROR in status notification: $e');
           print('   Stack trace: ${StackTrace.current}');
@@ -830,6 +996,7 @@ class MissionService {
         '${SupabaseConfig.missionsTable}?id=eq.$missionId',
         {fieldName: value},
       );
+      _invalidateMissionCaches();
     } catch (e) {
       rethrow;
     }
@@ -848,6 +1015,20 @@ class MissionService {
       return null; // NULL for empty priority
     }
     return priority;
+  }
+
+  String _normalizeMissionPrice(String? value) {
+    final normalized = (value ?? '').trim().replaceAll(',', '.');
+    if (normalized.isEmpty) {
+      return '0';
+    }
+
+    final parsed = double.tryParse(normalized);
+    if (parsed == null) {
+      return '0';
+    }
+
+    return parsed.toStringAsFixed(2);
   }
 
   /// Create a new pending mission
@@ -879,27 +1060,42 @@ class MissionService {
 
       // Convert empty strings to default/null for optional fields
       // mission_price has NOT NULL constraint, so use "0" as default
-      final finalMissionPrice =
-          missionPrice?.isEmpty ?? true ? "0" : missionPrice;
+      final finalMissionPrice = _normalizeMissionPrice(missionPrice);
       final finalPatientFirstName =
-          patientFirstName?.isEmpty ?? true ? null : patientFirstName;
+          patientFirstName?.trim().isEmpty ?? true
+              ? null
+              : patientFirstName!.trim();
       final finalPatientLastName =
-          patientLastName?.isEmpty ?? true ? null : patientLastName;
+          patientLastName?.trim().isEmpty ?? true
+              ? null
+              : patientLastName!.trim();
       final finalPatientPhone =
-          patientPhone?.isEmpty ?? true ? null : patientPhone;
+          patientPhone?.trim().isEmpty ?? true ? null : patientPhone!.trim();
+      final finalPatientName = [
+        finalPatientFirstName,
+        finalPatientLastName,
+      ].whereType<String>().where((item) => item.isNotEmpty).join(' ').trim();
       final finalInfirmierName =
-          infirmierName?.isEmpty ?? true ? null : infirmierName;
-      final finalNotes = notes?.isEmpty ?? true ? null : notes;
+          infirmierName?.trim().isEmpty ?? true ? null : infirmierName!.trim();
+      final finalNotes = notes?.trim().isEmpty ?? true ? null : notes!.trim();
       final finalMotifTransport =
-          motifTransport?.isEmpty ?? true ? null : motifTransport;
+          motifTransport?.trim().isEmpty ?? true
+              ? null
+              : motifTransport!.trim();
 
       final missionData = {
         'mission_number': missionNumber,
         'mission_date': finalMissionDate,
         'from_location': fromLocation,
         'to_location': toLocation,
+        'pickup_address': fromLocation,
+        'destination_address': toLocation,
         'status': 'pending',
         'infirmier_name': finalInfirmierName,
+        'patient_name': finalPatientName.isEmpty ? null : finalPatientName,
+        'patient_first_name': finalPatientFirstName,
+        'patient_last_name': finalPatientLastName,
+        'patient_phone': finalPatientPhone,
         'mission_price': finalMissionPrice,
         'notes': finalNotes,
         'fractures_injuries': finalMotifTransport,
@@ -914,6 +1110,7 @@ class MissionService {
         SupabaseConfig.missionsTable,
         missionData,
       );
+      _invalidateMissionCaches();
 
       print('[MissionService] Mission created: $missionNumber');
       final baseMission = Mission.fromJson(response);
@@ -932,10 +1129,9 @@ class MissionService {
               'contact': {
                 'patient_first_name': finalPatientFirstName,
                 'patient_last_name': finalPatientLastName,
-                'patient_name': [
-                  finalPatientFirstName,
-                  finalPatientLastName,
-                ].whereType<String>().map((item) => item.trim()).where((item) => item.isNotEmpty).join(' '),
+                'patient_name': finalPatientName.isEmpty
+                    ? null
+                    : finalPatientName,
                 'patient_phone': finalPatientPhone,
                 'pickup_address': fromLocation,
                 'destination_address': toLocation,
@@ -950,7 +1146,10 @@ class MissionService {
           mission = _mergeMissionWithPrivatePayload(baseMission, privateData);
         } catch (e) {
           debugPrint(
-            '[MissionService] Warning: mission contact details were not saved to private storage for mission ${baseMission.id}: $e',
+            '[MissionService] ERROR: mission contact details were not saved to private storage for mission ${baseMission.id}: $e',
+          );
+          throw Exception(
+            'Mission created, but patient contact details were not saved securely: $e',
           );
         }
       }
@@ -1201,7 +1400,9 @@ class MissionService {
   Future<void> _notifyMissionStatusUpdate(
     String missionId,
     String newStatus,
-  ) async {
+    {
+    required String missionNumber,
+  }) async {
     try {
       print('\n🔥 [MissionService] _notifyMissionStatusUpdate CALLED');
       print('   missionId: $missionId');
@@ -1233,6 +1434,8 @@ class MissionService {
           body = 'La mission $missionId a été mise à jour';
       }
 
+      body = body.replaceFirst(missionId, missionNumber);
+
       print('═══════════════════════════════════════════════════');
       print('📢 SENDING MISSION STATUS UPDATE NOTIFICATION');
       print('   Mission ID: $missionId');
@@ -1244,10 +1447,12 @@ class MissionService {
         'title': title,
         'body': body,
         'missionId': missionId,
+        'missionNumber': missionNumber,
         'tenantId': tenantId,
         'data': {
           'type': 'mission_status_update',
           'missionId': missionId,
+          'missionNumber': missionNumber,
           'status': newStatus,
           'tenantId': tenantId,
         },

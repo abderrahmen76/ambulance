@@ -183,8 +183,9 @@ class _MissionTechnicalSheetScreenState
   Future<void> _refreshMissionData() async {
     try {
       debugPrint('[MissionTechnicalSheet] Refreshing mission data...');
-      // Fetch fresh mission data from Supabase
-      final freshMission = await _missionService.getMissionById(
+      // Fetch operational data plus one private payload only when this PHI
+      // screen is opened.
+      final freshMission = await _missionService.getMissionByIdOperational(
         _currentMission.id,
       );
       final privatePayload = await _missionPrivateService.getMissionPrivateData(
@@ -193,24 +194,24 @@ class _MissionTechnicalSheetScreenState
       debugPrint(
         '[MissionTechnicalSheet] Fresh mission fetched: ${freshMission?.id}',
       );
-        if (freshMission != null && mounted) {
-          final mergedMission = _mergeMissionWithPrivatePayload(
-            freshMission,
-            privatePayload,
-          );
-          setState(() {
-            _currentMission = mergedMission;
-            final missionPhotoPayload =
-                privatePayload['mission_photo'] is Map<String, dynamic>
+      if (freshMission != null && mounted) {
+        final mergedMission = _mergeMissionWithPrivatePayload(
+          freshMission,
+          privatePayload,
+        );
+        setState(() {
+          _currentMission = mergedMission;
+          final missionPhotoPayload =
+              privatePayload['mission_photo'] is Map<String, dynamic>
                 ? Map<String, dynamic>.from(
                     privatePayload['mission_photo'] as Map<String, dynamic>,
                   )
                 : <String, dynamic>{};
-            _missionPhotoSignedUrl =
-                missionPhotoPayload['signed_url']?.toString();
-            debugPrint(
-              '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}',
-            );
+          _missionPhotoSignedUrl =
+              missionPhotoPayload['signed_url']?.toString();
+          debugPrint(
+            '[MissionTechnicalSheet] Vital Signs Raw: ${_currentMission.vitalSigns}',
+          );
           debugPrint(
             '[MissionTechnicalSheet] Patient Needs Raw: ${_currentMission.patientNeeds}',
           );

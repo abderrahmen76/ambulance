@@ -53,6 +53,7 @@ class User {
     String? email,
     String? role,
     String? roleLabel,
+    String? tenantId,
   }) {
     return User(
       id: id ?? this.id,
@@ -60,6 +61,7 @@ class User {
       email: email ?? this.email,
       role: role ?? this.role,
       roleLabel: roleLabel ?? this.roleLabel,
+      tenantId: tenantId ?? this.tenantId,
     );
   }
 }

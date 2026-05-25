@@ -508,6 +508,20 @@ class ApiClient {
         );
       }
 
+      if (_matchesTableEndpoint(endpoint, SupabaseConfig.missionsTable)) {
+        final response = await Supabase.instance.client.functions.invoke(
+          'secure_mission_phi',
+          body: {
+            'action': 'create_company_mission',
+            'data': body,
+          },
+        );
+        return Map<String, dynamic>.from(
+          ((response.data as Map<String, dynamic>?)?['mission'] as Map?) ??
+              ((response.data as Map<String, dynamic>?) ?? const {}),
+        );
+      }
+
       final url = _buildUrl(endpoint);
 
       final response = await _client
@@ -627,6 +641,26 @@ class ApiClient {
         return Map<String, dynamic>.from(
           ((response.data as Map<String, dynamic>?)?['maintenance_record']
                   as Map?) ??
+              ((response.data as Map<String, dynamic>?) ?? const {}),
+        );
+      }
+
+      if (_matchesTableEndpoint(endpoint, SupabaseConfig.missionsTable)) {
+        final missionId = _extractEqOperandFromEndpoint(endpoint, 'id');
+        if (missionId == null || missionId.isEmpty) {
+          throw ApiException('Missing mission id for secure mission update.');
+        }
+
+        final response = await Supabase.instance.client.functions.invoke(
+          'secure_mission_phi',
+          body: {
+            'action': 'update_company_mission',
+            'mission_id': missionId,
+            'patch': body,
+          },
+        );
+        return Map<String, dynamic>.from(
+          ((response.data as Map<String, dynamic>?)?['mission'] as Map?) ??
               ((response.data as Map<String, dynamic>?) ?? const {}),
         );
       }
@@ -789,6 +823,17 @@ class ApiClient {
           body: {
             'action': 'delete',
             'record_id': id,
+          },
+        );
+        return;
+      }
+
+      if (_matchesTableEndpoint(endpoint, SupabaseConfig.missionsTable)) {
+        await Supabase.instance.client.functions.invoke(
+          'secure_mission_phi',
+          body: {
+            'action': 'delete_company_mission',
+            'mission_id': id,
           },
         );
         return;

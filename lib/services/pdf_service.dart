@@ -6,9 +6,19 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart' show Printing;
+import 'package:supabase_flutter/supabase_flutter.dart' hide User;
 import '../models/mission_model.dart';
+import 'api_client.dart';
+import 'app_memory_cache_service.dart';
+import 'auth_service.dart';
+import 'manager_onboarding_service.dart';
 
 class PdfService {
+  static final ApiClient _apiClient = ApiClient();
+  static final AuthService _authService = AuthService();
+  static final ManagerOnboardingService _managerOnboardingService =
+      ManagerOnboardingService();
+
   /// Generate and download mission report PDF
   static Future<void> generateMissionReportPdf(Mission mission) async {
     try {
@@ -1400,6 +1410,231 @@ class PdfService {
     };
     return labels[key.toLowerCase()] ?? key;
   }
+
+  static _InvoiceHeaderInfo get _bedouiInvoiceHeader => const _InvoiceHeaderInfo(
+        title: 'BEDOUI AMBULANCE',
+        lines: [
+          'TRANSPORT MEDICALISE 24H/24H - ADULTE - ENFANT - NOUVEAU NE',
+          'Avenue Mohamed El Jamoussi Im. Lina 7ème étage App. N° 72 - 3000 SFAX',
+          'Tél: 56 250 250 - 93 903 333  **  E-mail: samibedoui@gmail.com',
+          'MatriculeFiscale: 1516966/W/A/M/000',
+        ],
+      );
+
+  static Future<_InvoiceHeaderInfo> _loadInvoiceHeader(Mission mission) async {
+    final tenantId = _resolveInvoiceTenantId(mission);
+    if (tenantId == null || tenantId.isEmpty) {
+      debugPrint('[PdfService] Invoice tenant_id missing; using generic header');
+      final onboardingTenant = await _loadTenantFromOnboardingState();
+      return onboardingTenant == null
+          ? const _InvoiceHeaderInfo(title: 'AMBULANCE', lines: [])
+          : _buildInvoiceHeaderInfoFromTenant(onboardingTenant);
+    }
+
+    try {
+      final tenant = await _loadTenantById(tenantId) ??
+          await _loadTenantFromOnboardingState();
+      if (tenant == null) return const _InvoiceHeaderInfo(title: 'AMBULANCE', lines: []);
+      return _buildInvoiceHeaderInfoFromTenant(tenant);
+    } catch (e) {
+      debugPrint('[PdfService] Error loading tenant invoice header: $e');
+      return const _InvoiceHeaderInfo(title: 'AMBULANCE', lines: []);
+    }
+  }
+
+  static String? _resolveInvoiceTenantId(Mission mission) {
+    final sessionUser = Supabase.instance.client.auth.currentUser;
+    final candidates = [
+      mission.tenantId,
+      mission.assignedCompanyId,
+      mission.selectedProviderTenantId,
+      _authService.cachedUser?.tenantId,
+      sessionUser?.appMetadata['tenant_id'],
+      sessionUser?.userMetadata?['tenant_id'],
+    ];
+
+    for (final candidate in candidates) {
+      final value = _cleanInvoiceText(candidate);
+      if (value != null) return value;
+    }
+    return null;
+  }
+
+  static Future<void> preloadTenantHeader(String tenantId) async {
+    final normalizedTenantId = tenantId.trim();
+    if (normalizedTenantId.isEmpty) return;
+    await _loadTenantById(normalizedTenantId);
+  }
+
+  static Future<Map<String, dynamic>?> _loadTenantById(String tenantId) async {
+    final cached = TenantHeaderCache.instance.get(tenantId);
+    if (cached != null) return cached;
+
+    try {
+      final tenants = await _apiClient.get(
+        '/rest/v1/tenants',
+        filters: {'id': 'eq.$tenantId'},
+        limit: 1,
+      );
+      if (tenants.isNotEmpty) {
+        final tenant = Map<String, dynamic>.from(tenants.first as Map);
+        TenantHeaderCache.instance.set(tenantId, tenant);
+        return tenant;
+      }
+    } catch (e) {
+      debugPrint('[PdfService] ApiClient tenant lookup failed: $e');
+    }
+
+    try {
+      final tenant = await Supabase.instance.client
+          .from('tenants')
+          .select('id,name,description,metadata,location_address')
+          .eq('id', tenantId)
+          .maybeSingle();
+      if (tenant != null) {
+        final tenantMap = Map<String, dynamic>.from(tenant);
+        TenantHeaderCache.instance.set(tenantId, tenantMap);
+        return tenantMap;
+      }
+    } catch (e) {
+      debugPrint('[PdfService] Supabase tenant lookup failed: $e');
+    }
+
+    return null;
+  }
+
+  static Future<Map<String, dynamic>?> _loadTenantFromOnboardingState() async {
+    try {
+      final state = await _managerOnboardingService.getOnboardingState();
+      final tenant = state['tenant'];
+      if (tenant is Map<String, dynamic>) return tenant;
+      if (tenant is Map) return Map<String, dynamic>.from(tenant);
+    } catch (e) {
+      debugPrint('[PdfService] Onboarding tenant lookup failed: $e');
+    }
+    return null;
+  }
+
+  static _InvoiceHeaderInfo _buildInvoiceHeaderInfoFromTenant(
+    Map<String, dynamic> tenant,
+  ) {
+    final tenantName = _cleanInvoiceText(tenant['name']) ?? 'AMBULANCE';
+    if (tenantName.toLowerCase() == 'ambulance bedoui') {
+      return _bedouiInvoiceHeader;
+    }
+
+    final metadata = _tenantMetadata(tenant['metadata']);
+    final lines = <String>[];
+
+    _addInvoiceLine(lines, _cleanInvoiceText(tenant['description']));
+    _addInvoiceLine(
+      lines,
+      _firstCleanText([
+        metadata['company_address'],
+        tenant['location_address'],
+      ]),
+    );
+
+    final city = _firstCleanText([
+      metadata['company_city'],
+      metadata['city'],
+    ]);
+    if (city != null &&
+        !lines.any((line) => line.toLowerCase().contains(city.toLowerCase()))) {
+      _addInvoiceLine(lines, 'Ville: $city');
+    }
+
+    _addInvoiceLine(lines, _invoicePhoneLine(metadata));
+
+    return _InvoiceHeaderInfo(
+      title: tenantName.toUpperCase(),
+      lines: lines,
+    );
+  }
+
+  static pw.Widget _buildInvoiceHeader(_InvoiceHeaderInfo header) {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border(
+          bottom: pw.BorderSide(width: 2, color: PdfColors.red),
+        ),
+      ),
+      padding: const pw.EdgeInsets.only(bottom: 10),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            header.title,
+            style: pw.TextStyle(
+              fontSize: 16,
+              fontWeight: pw.FontWeight.bold,
+              color: PdfColors.red,
+            ),
+          ),
+          if (header.lines.isNotEmpty) pw.SizedBox(height: 5),
+          ...header.lines.map(
+            (line) => pw.Text(line, style: const pw.TextStyle(fontSize: 8)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static Map<String, dynamic> _tenantMetadata(dynamic rawMetadata) {
+    if (rawMetadata is Map<String, dynamic>) return rawMetadata;
+    if (rawMetadata is Map) {
+      return rawMetadata.map((key, value) => MapEntry(key.toString(), value));
+    }
+    if (rawMetadata is String && rawMetadata.trim().isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawMetadata);
+        if (decoded is Map<String, dynamic>) return decoded;
+        if (decoded is Map) {
+          return decoded.map((key, value) => MapEntry(key.toString(), value));
+        }
+      } catch (_) {
+        return const {};
+      }
+    }
+    return const {};
+  }
+
+  static String? _invoicePhoneLine(Map<String, dynamic> metadata) {
+    final phoneNumbers = metadata['company_phone_numbers'];
+    if (phoneNumbers is List) {
+      final phones = phoneNumbers
+          .map(_cleanInvoiceText)
+          .whereType<String>()
+          .toSet()
+          .toList();
+      if (phones.isNotEmpty) return 'Tel: ${phones.join(' - ')}';
+    }
+
+    final phone = _firstCleanText([
+      metadata['company_phone'],
+      metadata['phone'],
+    ]);
+    return phone == null ? null : 'Tel: $phone';
+  }
+
+  static String? _firstCleanText(List<dynamic> values) {
+    for (final value in values) {
+      final clean = _cleanInvoiceText(value);
+      if (clean != null) return clean;
+    }
+    return null;
+  }
+
+  static String? _cleanInvoiceText(dynamic value) {
+    final text = value?.toString().trim();
+    return text == null || text.isEmpty ? null : text;
+  }
+
+  static void _addInvoiceLine(List<String> lines, String? value) {
+    if (value == null || lines.contains(value)) return;
+    lines.add(value);
+  }
+
   /// Generate and download invoice (facture) PDF for a mission
   static Future<void> generateInvoicePdf(Mission mission) async {
     try {
@@ -1407,6 +1642,7 @@ class PdfService {
           '[PdfService] Generating Invoice for mission: ${mission.missionNumber}');
 
       final pdf = pw.Document();
+      final invoiceHeader = await _loadInvoiceHeader(mission);
 
       // Calculate pricing (assuming missionPrice is the total HT)
       double totalHT = 0;
@@ -1443,45 +1679,7 @@ class PdfService {
           build: (context) => pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              // Header with company info
-              pw.Container(
-                decoration: pw.BoxDecoration(
-                  border: pw.Border(
-                    bottom: pw.BorderSide(width: 2, color: PdfColors.red),
-                  ),
-                ),
-                padding: const pw.EdgeInsets.only(bottom: 10),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    pw.Text(
-                      'BEDOUI AMBULANCE',
-                      style: pw.TextStyle(
-                        fontSize: 16,
-                        fontWeight: pw.FontWeight.bold,
-                        color: PdfColors.red,
-                      ),
-                    ),
-                    pw.SizedBox(height: 5),
-                    pw.Text(
-                      'TRANSPORT MEDICALISE 24H/24H - ADULTE - ENFANT - NOUVEAU NE',
-                      style: const pw.TextStyle(fontSize: 8),
-                    ),
-                    pw.Text(
-                      'Avenue Mohamed El Jamoussi Im. Lina 7Ã¨me Ã©tage App. NÂ° 72 - 3000 SFAX',
-                      style: const pw.TextStyle(fontSize: 8),
-                    ),
-                    pw.Text(
-                      'TÃ©l: 56 250 250 - 93 903 333  **  E-mail: samibedoui@gmail.com',
-                      style: const pw.TextStyle(fontSize: 8),
-                    ),
-                    pw.Text(
-                      'MatriculeFiscale: 1516966/W/A/M/000',
-                      style: const pw.TextStyle(fontSize: 8),
-                    ),
-                  ],
-                ),
-              ),
+              _buildInvoiceHeader(invoiceHeader),
               pw.SizedBox(height: 15),
 
               // Invoice Title
@@ -1564,7 +1762,7 @@ class PdfService {
                     child: pw.Column(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        pw.Text('LIEU DE DÃ‰PART',
+                        pw.Text('LIEU DE DÉPART',
                             style: pw.TextStyle(
                                 fontSize: 9, fontWeight: pw.FontWeight.bold)),
                         pw.Container(
@@ -1641,7 +1839,7 @@ class PdfService {
                     children: [
                       pw.Padding(
                         padding: const pw.EdgeInsets.all(5),
-                        child: pw.Text('Service de Transport MÃ©dical',
+                        child: pw.Text('Service de Transport Médical',
                             style: const pw.TextStyle(fontSize: 9)),
                       ),
                       pw.Padding(
@@ -1731,6 +1929,12 @@ class PdfService {
   }
 }
 
+class _InvoiceHeaderInfo {
+  final String title;
+  final List<String> lines;
 
-
-
+  const _InvoiceHeaderInfo({
+    required this.title,
+    required this.lines,
+  });
+}

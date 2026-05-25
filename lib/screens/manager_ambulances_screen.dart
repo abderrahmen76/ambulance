@@ -13,6 +13,7 @@ import '../services/fuel_card_service.dart';
 import '../services/maintenance_service.dart';
 import '../services/ambulance_report_service.dart';
 import '../services/company_staff_service.dart';
+import '../services/resume_refresh_service.dart';
 import '../config/constants.dart';
 import '../utils/responsive.dart';
 import './add_maintenance_screen.dart';
@@ -41,22 +42,35 @@ class _ManagerAmbulancesScreenState extends State<ManagerAmbulancesScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
     _reloadAmbulances();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      debugPrint(
-        '[ManagerAmbulancesScreen] App resumed, reloading ambulances...',
-      );
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+    }
+  }
+
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 2) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
       _reloadAmbulances();
+    } else {
+      debugPrint('[ManagerAmbulancesScreen] Short resume, using cached data');
     }
   }
 
@@ -224,6 +238,13 @@ class _ManagerAmbulancesScreenContentState
   final _maintenanceService = MaintenanceService();
   final _companyStaffService = CompanyStaffService();
   late Future<List<Ambulance>> _ambulancesFuture;
+  Future<List<MaintenanceRecord>>? _allMaintenanceRecordsFuture;
+  Future<List<Mission>>? _activeMissionsFuture;
+  Future<List<Mission>>? _allMissionsFuture;
+  final Map<String, Future<List<MaintenanceRecord>>> _maintenanceFutures = {};
+  final Map<String, Future<List<EquipmentRental>>> _equipmentFutures = {};
+  final Map<String, Future<List<FuelCard>>> _fuelCardFutures = {};
+  final Map<String, Future<double>> _fuelBalanceFutures = {};
   Ambulance? _selectedAmbulance;
   List<String> _equipmentTypes = [...baseEquipmentTypes];
   List<User> _equipmentCompanyStaff = [];
@@ -272,19 +293,10 @@ class _ManagerAmbulancesScreenContentState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
     _reloadAmbulances();
     _loadEquipmentMetadata();
 
-    // Critical fix: reload after widget is fully built.
-    // This prevents lifecycle event race conditions when widget is recreated
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        debugPrint(
-          '[ManagerAmbulancesScreenContent] Post-frame callback: reloading ambulances',
-        );
-        _reloadAmbulances();
-      }
-    });
   }
 
   String get _equipmentTypesPrefsKey {
@@ -333,16 +345,33 @@ class _ManagerAmbulancesScreenContentState
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && mounted) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+    }
+  }
+
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 2) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
       debugPrint(
-        '[ManagerAmbulancesScreenContent] App resumed, reloading ambulances...',
+        '[ManagerAmbulancesScreenContent] Long resume, refreshing visible tab',
       );
       _reloadAmbulances();
+    } else {
+      debugPrint(
+        '[ManagerAmbulancesScreenContent] Short resume, using cached data',
+      );
     }
   }
 
@@ -350,6 +379,10 @@ class _ManagerAmbulancesScreenContentState
     if (mounted) {
       setState(() {
         _ambulancesFuture = _getAllAmbulances();
+        _allMaintenanceRecordsFuture = _getAllMaintenanceRecords();
+        _activeMissionsFuture = _getAllActiveMissions();
+        _allMissionsFuture = _getAllMissions();
+        _refreshSelectedAmbulanceFuturesInState();
       });
     }
   }
@@ -376,46 +409,95 @@ class _ManagerAmbulancesScreenContentState
     }
   }
 
+  Future<List<MaintenanceRecord>> _allMaintenanceRecords() =>
+      _allMaintenanceRecordsFuture ??= _getAllMaintenanceRecords();
+
+  Future<List<Mission>> _activeMissions() =>
+      _activeMissionsFuture ??= _getAllActiveMissions();
+
+  Future<List<Mission>> _allMissions() =>
+      _allMissionsFuture ??= _getAllMissions();
+
+  Future<List<MaintenanceRecord>> _maintenanceRecordsFuture(
+    String ambulanceId,
+  ) =>
+      _maintenanceFutures[ambulanceId] ??= _getMaintenanceRecords(ambulanceId);
+
+  Future<List<EquipmentRental>> _equipmentFuture(String ambulanceId) =>
+      _equipmentFutures[ambulanceId] ??=
+          _equipmentRentalService.getAmbulanceEquipmentRentals(ambulanceId);
+
+  Future<List<FuelCard>> _fuelCardsFuture(String ambulanceId) =>
+      _fuelCardFutures[ambulanceId] ??= _getFuelCards(ambulanceId);
+
+  double _calculateFuelBalance(List<FuelCard> fuelCards) {
+    double balance = 0.0;
+    for (final card in fuelCards) {
+      if (card.driverName.toLowerCase() == 'refill') {
+        balance += card.soldesPaid;
+      } else {
+        balance -= card.soldesPaid;
+      }
+    }
+    return balance;
+  }
+
+  Future<double> _fuelBalanceFuture(String ambulanceId) =>
+      _fuelBalanceFutures[ambulanceId] ??=
+          _fuelCardsFuture(ambulanceId).then(_calculateFuelBalance);
+
   Future<double> _currentCardBalance(String ambulanceId) async {
     try {
-      final fuelCards = await _getFuelCards(ambulanceId);
-      double balance = 0.0;
-
-      for (final card in fuelCards) {
-        if (card.driverName.toLowerCase() == 'refill') {
-          // Refill: ADD to balance
-          balance += card.soldesPaid;
-        } else {
-          // Consumption: SUBTRACT from balance
-          balance -= card.soldesPaid;
-        }
-      }
-
-      return balance;
+      return _fuelBalanceFuture(ambulanceId);
     } catch (e) {
       print('Error calculating balance: $e');
       return 0.0;
     }
   }
 
-  Map<String, double> _buildFuelCardRemainingById(List<FuelCard> fuelCards) {
-    final chronologicalCards = List<FuelCard>.from(fuelCards)
-      ..sort((a, b) => a.date.compareTo(b.date));
-
-    double runningBalance = 0.0;
-    final remainingById = <String, double>{};
-
-    for (final card in chronologicalCards) {
-      if (card.driverName.toLowerCase() == 'refill') {
-        runningBalance += card.soldesPaid;
-      } else {
-        runningBalance -= card.soldesPaid;
-      }
-      remainingById[card.id] = runningBalance;
-    }
-
-    return remainingById;
+  void _refreshSelectedAmbulanceFuturesInState() {
+    final ambulanceId = _selectedAmbulance?.id;
+    if (ambulanceId == null) return;
+    _maintenanceFutures[ambulanceId] = _getMaintenanceRecords(ambulanceId);
+    _equipmentFutures[ambulanceId] =
+        _equipmentRentalService.getAmbulanceEquipmentRentals(ambulanceId);
+    final fuelCardsFuture = _getFuelCards(ambulanceId);
+    _fuelCardFutures[ambulanceId] = fuelCardsFuture;
+    _fuelBalanceFutures[ambulanceId] =
+        fuelCardsFuture.then(_calculateFuelBalance);
   }
+
+  void _refreshMaintenanceSection(String ambulanceId) {
+    if (!mounted) return;
+    setState(() {
+      _maintenanceFutures[ambulanceId] = _getMaintenanceRecords(ambulanceId);
+      _allMaintenanceRecordsFuture = _getAllMaintenanceRecords();
+    });
+  }
+
+  void _refreshEquipmentSection(String ambulanceId) {
+    if (!mounted) return;
+    setState(() {
+      _equipmentFutures[ambulanceId] =
+          _equipmentRentalService.getAmbulanceEquipmentRentals(ambulanceId);
+    });
+  }
+
+  void _refreshFuelSection(String ambulanceId) {
+    if (!mounted) return;
+    setState(() {
+      final fuelCardsFuture = _getFuelCards(ambulanceId);
+      _fuelCardFutures[ambulanceId] = fuelCardsFuture;
+      _fuelBalanceFutures[ambulanceId] =
+          fuelCardsFuture.then(_calculateFuelBalance);
+    });
+  }
+
+  bool _isFuelCardRefill(FuelCard card) =>
+      card.driverName.trim().toLowerCase() == 'refill';
+
+  String _fuelCardDriverLabel(FuelCard card) =>
+      _isFuelCardRefill(card) ? 'Recharge' : card.driverName;
 
   Future<List<MaintenanceRecord>> _getMaintenanceRecords(
     String ambulanceId,
@@ -511,7 +593,7 @@ class _ManagerAmbulancesScreenContentState
             final todayDate = DateTime.now().toString().split(' ')[0];
 
             return FutureBuilder<List<MaintenanceRecord>>(
-              future: _getAllMaintenanceRecords(),
+              future: _allMaintenanceRecords(),
               builder: (context, maintenanceSnapshot) {
                 final maintenanceRecords = maintenanceSnapshot.data ?? [];
 
@@ -521,12 +603,12 @@ class _ManagerAmbulancesScreenContentState
                     .toList();
 
                 return FutureBuilder<List<Mission>>(
-                  future: _getAllActiveMissions(),
+                  future: _activeMissions(),
                   builder: (context, missionsSnapshot) {
                     final activeMissions = missionsSnapshot.data ?? [];
 
                     return FutureBuilder<List<Mission>>(
-                      future: _getAllMissions(),
+                      future: _allMissions(),
                       builder: (context, allMissionsSnapshot) {
                         final allMissions = allMissionsSnapshot.data ?? [];
 
@@ -643,12 +725,19 @@ class _ManagerAmbulancesScreenContentState
                                           crossAxisAlignment:
                                               CrossAxisAlignment.start,
                                           children: [
-                                            Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment
-                                                      .spaceBetween,
+                                            Wrap(
+                                              spacing: 12,
+                                              runSpacing: 10,
+                                              alignment:
+                                                  WrapAlignment.spaceBetween,
+                                              crossAxisAlignment:
+                                                  WrapCrossAlignment.center,
                                               children: [
-                                                Row(
+                                                Wrap(
+                                                  spacing: 12,
+                                                  runSpacing: 8,
+                                                  crossAxisAlignment:
+                                                      WrapCrossAlignment.center,
                                                   children: [
                                                     Container(
                                                       width: 50,
@@ -666,7 +755,6 @@ class _ManagerAmbulancesScreenContentState
                                                         size: 28,
                                                       ),
                                                     ),
-                                                    const SizedBox(width: 12),
                                                     Column(
                                                       crossAxisAlignment:
                                                           CrossAxisAlignment
@@ -771,10 +859,11 @@ class _ManagerAmbulancesScreenContentState
                                               ],
                                             ),
                                             const SizedBox(height: 12),
-                                            Row(
-                                              mainAxisAlignment:
-                                                  MainAxisAlignment
-                                                      .spaceBetween,
+                                            Wrap(
+                                              spacing: 12,
+                                              runSpacing: 8,
+                                              alignment:
+                                                  WrapAlignment.spaceBetween,
                                               children: [
                                                 Column(
                                                   crossAxisAlignment:
@@ -848,107 +937,61 @@ class _ManagerAmbulancesScreenContentState
         .toSet()
         .length;
 
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'DISPONIBLE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                    letterSpacing: 0.5,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final cardWidth = constraints.maxWidth < 520
+            ? constraints.maxWidth
+            : (constraints.maxWidth - 24) / 3;
+
+        Widget statCard(String title, String value) {
+          return SizedBox(
+            width: cardWidth,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey[200]!),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey[600],
+                      letterSpacing: 0.5,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  available.toString(),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+                  const SizedBox(height: 8),
+                  Text(
+                    value,
+                    style: const TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
+          );
+        }
+
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            statCard('DISPONIBLE', available.toString()),
+            statCard('EN SERVICE', inService.toString()),
+            statCard(
+              'ENTRETIEN',
+              uniqueAmbulancesWithMaintenanceToday.toString(),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'EN SERVICE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  inService.toString(),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'ENTRETIEN',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  uniqueAmbulancesWithMaintenanceToday.toString(),
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -966,8 +1009,11 @@ class _ManagerAmbulancesScreenContentState
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Wrap(
+                spacing: 12,
+                runSpacing: 10,
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
                     'Détails de l\'ambulance: ${ambulance.ambulanceNumber}',
@@ -992,8 +1038,9 @@ class _ManagerAmbulancesScreenContentState
                 ],
               ),
               const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Wrap(
+                spacing: 28,
+                runSpacing: 16,
                 children: [
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1054,8 +1101,11 @@ class _ManagerAmbulancesScreenContentState
               const SizedBox(height: 12),
               _buildMissionsTrendChart(ambulance),
               const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   Text(
                     'HISTORIQUE DE MAINTENANCE',
@@ -1078,7 +1128,7 @@ class _ManagerAmbulancesScreenContentState
               ),
               const SizedBox(height: 16),
               FutureBuilder<List<MaintenanceRecord>>(
-                future: _getMaintenanceRecords(ambulance.id),
+                future: _maintenanceRecordsFuture(ambulance.id),
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
                     return const SizedBox(
@@ -1181,7 +1231,9 @@ class _ManagerAmbulancesScreenContentState
                                           ),
                                         ),
                                         child: Text(
-                                          record.maintenanceType,
+                                          _formatMaintenanceType(
+                                            record.maintenanceType,
+                                          ),
                                           style: TextStyle(
                                             fontSize: 11,
                                             color: statusColor,
@@ -1223,8 +1275,11 @@ class _ManagerAmbulancesScreenContentState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
                 'ÉQUIPEMENTS',
@@ -1282,9 +1337,7 @@ class _ManagerAmbulancesScreenContentState
           ),
           const SizedBox(height: 12),
           FutureBuilder<List<EquipmentRental>>(
-            future: _equipmentRentalService.getAmbulanceEquipmentRentals(
-              ambulance.id,
-            ),
+            future: _equipmentFuture(ambulance.id),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const SizedBox(
@@ -1315,9 +1368,7 @@ class _ManagerAmbulancesScreenContentState
                   ),
                 );
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: sortedRentals.map((rental) {
+              final equipmentCards = sortedRentals.map((rental) {
                   final isSale = rental.transactionType == 'sale';
                   final isReturned = rental.isReturned ?? false;
                   final chipColor = isSale
@@ -1428,6 +1479,13 @@ class _ManagerAmbulancesScreenContentState
                                     _showEditEquipmentDialog(rental),
                                 icon: const Icon(Icons.edit, size: 16),
                                 label: const Text('Modifier'),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                ),
                               ),
                               if (!isSale && !isReturned)
                                 OutlinedButton.icon(
@@ -1438,6 +1496,13 @@ class _ManagerAmbulancesScreenContentState
                                     size: 16,
                                   ),
                                   label: const Text('Retour'),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 8,
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                                 ),
                               if (!isSale && rental.returnDate != null)
                                 OutlinedButton.icon(
@@ -1447,6 +1512,13 @@ class _ManagerAmbulancesScreenContentState
                                       ),
                                   icon: const Icon(Icons.event, size: 16),
                                   label: const Text('Date retour'),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 8,
+                                    ),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                                 ),
                               OutlinedButton.icon(
                                 onPressed: () =>
@@ -1455,6 +1527,11 @@ class _ManagerAmbulancesScreenContentState
                                 label: const Text('Supprimer'),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: Colors.red,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 8,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
                                 ),
                               ),
                             ],
@@ -1463,7 +1540,25 @@ class _ManagerAmbulancesScreenContentState
                       ),
                     ),
                   );
-                }).toList(),
+                }).toList();
+
+              if (equipmentCards.length <= 5) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: equipmentCards,
+                );
+              }
+
+              return SizedBox(
+                height: 760,
+                child: Scrollbar(
+                  thumbVisibility: true,
+                  child: ListView(
+                    primary: false,
+                    padding: EdgeInsets.zero,
+                    children: equipmentCards,
+                  ),
+                ),
               );
             },
           ),
@@ -1483,8 +1578,11 @@ class _ManagerAmbulancesScreenContentState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            spacing: 12,
+            runSpacing: 10,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               Text(
                 'CARTES CARBURANT',
@@ -1553,8 +1651,11 @@ class _ManagerAmbulancesScreenContentState
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(color: Colors.blue[200]!),
                 ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     Text(
                       'Solde Actuel',
@@ -1579,7 +1680,7 @@ class _ManagerAmbulancesScreenContentState
           ),
           const SizedBox(height: 12),
           FutureBuilder<List<FuelCard>>(
-            future: _getFuelCards(ambulance.id),
+            future: _fuelCardsFuture(ambulance.id),
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 return const SizedBox(
@@ -1600,20 +1701,23 @@ class _ManagerAmbulancesScreenContentState
               // Sort cards by date in descending order (newest first)
               final sortedCards = List<FuelCard>.from(fuelCards)
                 ..sort((a, b) => b.date.compareTo(a.date));
-              final remainingById = _buildFuelCardRemainingById(fuelCards);
 
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: sortedCards.map((card) {
-                  final computedRemaining = remainingById[card.id] ?? 0.0;
+                  final isRefill = _isFuelCardRefill(card);
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 12),
                     child: Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Colors.grey[50],
+                        color: isRefill ? Colors.blue[50] : Colors.grey[50],
                         borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.grey[200]!),
+                        border: Border.all(
+                          color: isRefill
+                              ? Colors.blue[200]!
+                              : Colors.grey[200]!,
+                        ),
                       ),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1623,24 +1727,20 @@ class _ManagerAmbulancesScreenContentState
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Chauffeur: ${card.driverName}',
-                                  style: const TextStyle(
+                                  'Chauffeur: ${_fuelCardDriverLabel(card)}',
+                                  style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
+                                    color: isRefill ? Colors.blue[900] : null,
                                   ),
                                 ),
                                 Text(
-                                  'Soldes Payé: ${card.soldesPaid} TND',
+                                  '${isRefill ? 'Montant recharge' : 'Solde paye'}: ${card.soldesPaid} TND',
                                   style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                ),
-                                Text(
-                                  'Soldes Restant: ${computedRemaining.toStringAsFixed(1)} TND',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
+                                    color: isRefill
+                                        ? Colors.blue[800]
+                                        : Colors.grey[600],
                                   ),
                                 ),
                               ],
@@ -1704,7 +1804,7 @@ class _ManagerAmbulancesScreenContentState
     });
 
     return FutureBuilder<List<Mission>>(
-      future: _getAllMissions(),
+      future: _allMissions(),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const SizedBox(
@@ -1784,6 +1884,20 @@ class _ManagerAmbulancesScreenContentState
     }
   }
 
+  String _formatMaintenanceType(String type) {
+    const labels = {
+      'oil change': 'Vidange',
+      'brake pad replacement': 'Plaquettes de Frein',
+      'spark plugs': 'Bougies',
+      'tires': 'Pneus',
+      'brake fluid': 'Liquide de Frein',
+      'urgent': 'Urgent',
+      'pending': 'Autre',
+    };
+    final normalized = type.trim().toLowerCase();
+    return labels[normalized] ?? type;
+  }
+
   void _showAddEquipmentRentalDialog(Ambulance ambulance) {
     showDialog(
       context: context,
@@ -1798,7 +1912,7 @@ class _ManagerAmbulancesScreenContentState
           Navigator.pop(dialogContext);
           await _loadEquipmentTypes();
           if (!mounted) return;
-          setState(() {});
+          _refreshEquipmentSection(ambulance.id);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('${rental.equipmentType} loué avec succès'),
@@ -1824,7 +1938,7 @@ class _ManagerAmbulancesScreenContentState
           Navigator.pop(dialogContext);
           await _loadEquipmentTypes();
           if (!mounted) return;
-          setState(() {});
+          _refreshEquipmentSection(ambulance.id);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text('${sale.equipmentType} vendu avec succès'),
@@ -1894,7 +2008,7 @@ class _ManagerAmbulancesScreenContentState
                 );
                 if (!mounted) return;
                 Navigator.pop(dialogContext);
-                setState(() {});
+                _refreshEquipmentSection(rental.ambulanceId);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Équipement retourné'),
@@ -1951,7 +2065,7 @@ class _ManagerAmbulancesScreenContentState
                 );
                 if (!mounted) return;
                 Navigator.pop(dialogContext);
-                setState(() {});
+                _refreshEquipmentSection(rental.ambulanceId);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Date de retour mise à jour'),
@@ -2110,7 +2224,7 @@ class _ManagerAmbulancesScreenContentState
                 );
                 if (!mounted) return;
                 Navigator.pop(dialogContext);
-                setState(() {});
+                _refreshEquipmentSection(rental.ambulanceId);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Équipement mis à jour'),
@@ -2150,7 +2264,7 @@ class _ManagerAmbulancesScreenContentState
                 await _equipmentRentalService.deleteRental(rental.id);
                 if (!mounted) return;
                 Navigator.pop(dialogContext);
-                setState(() {});
+                _refreshEquipmentSection(rental.ambulanceId);
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Équipement supprimé'),
@@ -2184,8 +2298,7 @@ class _ManagerAmbulancesScreenContentState
           ),
         )
         .then((_) {
-          // Refresh data when user returns from the screen
-          _loadAmbulances();
+          _refreshMaintenanceSection(ambulance.id);
         });
   }
 
@@ -2223,7 +2336,10 @@ class _ManagerAmbulancesScreenContentState
             children: [
               _buildDetailRow('Date:', record.date),
               const SizedBox(height: 12),
-              _buildDetailRow('Type d\'Entretien:', record.maintenanceType),
+              _buildDetailRow(
+                'Type d\'Entretien:',
+                _formatMaintenanceType(record.maintenanceType),
+              ),
               const SizedBox(height: 12),
               _buildDetailRow('Description:', record.maintenanceDescription),
               const SizedBox(height: 12),
@@ -2524,8 +2640,7 @@ class _ManagerAmbulancesScreenContentState
           ),
         )
         .then((_) {
-          // Refresh data when user returns from the screen
-          _loadAmbulances();
+          _refreshFuelSection(ambulance.id);
         });
   }
 
@@ -2544,8 +2659,7 @@ class _ManagerAmbulancesScreenContentState
           ),
         )
         .then((_) {
-          // Refresh data when user returns from the screen
-          _loadAmbulances();
+          _refreshFuelSection(ambulance.id);
         });
   }
 
@@ -2561,11 +2675,12 @@ class _ManagerAmbulancesScreenContentState
             children: [
               _buildDetailRow('Date:', card.date),
               const SizedBox(height: 12),
-              _buildDetailRow('Conducteur:', card.driverName ?? '-'),
+              _buildDetailRow('Conducteur:', _fuelCardDriverLabel(card)),
               const SizedBox(height: 12),
-              _buildDetailRow('Soldes Payé:', '${card.soldesPaid} TND'),
-              const SizedBox(height: 12),
-              _buildDetailRow('Soldes Restant:', '${card.soldesRestant} TND'),
+              _buildDetailRow(
+                _isFuelCardRefill(card) ? 'Montant recharge:' : 'Solde paye:',
+                '${card.soldesPaid} TND',
+              ),
               const SizedBox(height: 12),
               _buildDetailRow(
                 'Kilométrage:',
@@ -2588,13 +2703,13 @@ class _ManagerAmbulancesScreenContentState
 
   void _showEditFuelCardDialog(FuelCard card) {
     final formKey = GlobalKey<FormState>();
+    final isRefillCard = _isFuelCardRefill(card);
     final driverOptionsFuture = _loadDriverOptions();
-    final driverNameController = TextEditingController(text: card.driverName);
+    final driverNameController = TextEditingController(
+      text: _fuelCardDriverLabel(card),
+    );
     final soldesPaidController = TextEditingController(
       text: card.soldesPaid.toString(),
-    );
-    final soldesRestantController = TextEditingController(
-      text: card.soldesRestant.toString(),
     );
     final selectedDriverIds = <String>{};
     var initializedSelection = false;
@@ -2620,77 +2735,71 @@ class _ManagerAmbulancesScreenContentState
                     validator: (value) =>
                         value?.trim().isEmpty ?? true ? 'Requis' : null,
                   ),
-                  const SizedBox(height: 12),
-                  FutureBuilder<List<User>>(
-                    future: driverOptionsFuture,
-                    builder: (context, snapshot) {
-                      final options = snapshot.data ?? const <User>[];
-                      if (!initializedSelection &&
-                          snapshot.connectionState == ConnectionState.done) {
-                        selectedDriverIds
-                          ..clear()
-                          ..addAll(
-                            _buildSelectedDriverIds(card.driverName, options),
+                  if (!isRefillCard) ...[
+                    const SizedBox(height: 12),
+                    FutureBuilder<List<User>>(
+                      future: driverOptionsFuture,
+                      builder: (context, snapshot) {
+                        final options = snapshot.data ?? const <User>[];
+                        if (!initializedSelection &&
+                            snapshot.connectionState == ConnectionState.done) {
+                          selectedDriverIds
+                            ..clear()
+                            ..addAll(
+                              _buildSelectedDriverIds(card.driverName, options),
+                            );
+                          initializedSelection = true;
+                          _syncDriverController(
+                            driverNameController,
+                            options,
+                            selectedDriverIds,
                           );
-                        initializedSelection = true;
-                        _syncDriverController(
-                          driverNameController,
-                          options,
-                          selectedDriverIds,
-                        );
-                      }
+                        }
 
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: CircularProgressIndicator(),
-                        );
-                      }
-
-                      if (options.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
-
-                      return Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: options.map((member) {
-                          return FilterChip(
-                            label: Text(member.name),
-                            selected: selectedDriverIds.contains(member.id),
-                            onSelected: (selected) {
-                              setDialogState(() {
-                                if (selected) {
-                                  selectedDriverIds.add(member.id);
-                                } else {
-                                  selectedDriverIds.remove(member.id);
-                                }
-                                _syncDriverController(
-                                  driverNameController,
-                                  options,
-                                  selectedDriverIds,
-                                );
-                              });
-                            },
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: CircularProgressIndicator(),
                           );
-                        }).toList(),
-                      );
-                    },
-                  ),
+                        }
+
+                        if (options.isEmpty) {
+                          return const SizedBox.shrink();
+                        }
+
+                        return Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: options.map((member) {
+                            return FilterChip(
+                              label: Text(member.name),
+                              selected: selectedDriverIds.contains(member.id),
+                              onSelected: (selected) {
+                                setDialogState(() {
+                                  if (selected) {
+                                    selectedDriverIds.add(member.id);
+                                  } else {
+                                    selectedDriverIds.remove(member.id);
+                                  }
+                                  _syncDriverController(
+                                    driverNameController,
+                                    options,
+                                    selectedDriverIds,
+                                  );
+                                });
+                              },
+                            );
+                          }).toList(),
+                        );
+                      },
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   TextFormField(
                     controller: soldesPaidController,
                     decoration: const InputDecoration(
-                      labelText: 'Soldes Payé (TND)',
-                      border: OutlineInputBorder(),
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
-                  const SizedBox(height: 12),
-                  TextFormField(
-                    controller: soldesRestantController,
-                    decoration: const InputDecoration(
-                      labelText: 'Soldes Restant (TND)',
+                      labelText: 'Solde paye (TND)',
                       border: OutlineInputBorder(),
                     ),
                     keyboardType: TextInputType.number,
@@ -2710,9 +2819,10 @@ class _ManagerAmbulancesScreenContentState
                   Navigator.pop(dialogContext);
                   _updateFuelCard(
                     card.id,
-                    driverNameController.text.trim(),
+                    isRefillCard
+                        ? card.driverName
+                        : driverNameController.text.trim(),
                     double.tryParse(soldesPaidController.text) ?? 0,
-                    double.tryParse(soldesRestantController.text) ?? 0,
                   );
                 }
               },
@@ -2728,20 +2838,21 @@ class _ManagerAmbulancesScreenContentState
     String cardId,
     String driverName,
     double soldesPaid,
-    double soldesRestant,
   ) async {
     try {
       await _apiClient.patch('${SupabaseConfig.fuelCardsTable}?id=eq.$cardId', {
         'driver_name': driverName,
         'soldes_paid': soldesPaid,
-        'soldes_restant': soldesRestant,
       });
 
       if (mounted) {
-        _loadAmbulances();
+        final ambulanceId = _selectedAmbulance?.id;
+        if (ambulanceId != null) {
+          _refreshFuelSection(ambulanceId);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Fuel card updated'),
+            content: Text('Carte carburant mise a jour'),
             backgroundColor: Colors.green,
           ),
         );
@@ -2773,7 +2884,10 @@ class _ManagerAmbulancesScreenContentState
       );
 
       if (mounted) {
-        _loadAmbulances();
+        final ambulanceId = _selectedAmbulance?.id;
+        if (ambulanceId != null) {
+          _refreshMaintenanceSection(ambulanceId);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Maintenance mise à jour'),
@@ -2795,7 +2909,10 @@ class _ManagerAmbulancesScreenContentState
       await _apiClient.delete(SupabaseConfig.fuelCardsTable, cardId);
 
       if (mounted) {
-        setState(() {});
+        final ambulanceId = _selectedAmbulance?.id;
+        if (ambulanceId != null) {
+          _refreshFuelSection(ambulanceId);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Carte carburant supprimée'),
@@ -2829,7 +2946,6 @@ class _ManagerAmbulancesScreenContentState
             onPressed: () {
               Navigator.pop(dialogContext);
               _deleteFuelCard(card.id);
-              _loadAmbulances();
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Supprimer'),
@@ -2844,7 +2960,10 @@ class _ManagerAmbulancesScreenContentState
       await _apiClient.delete(SupabaseConfig.maintenanceRecordsTable, recordId);
 
       if (mounted) {
-        _loadAmbulances();
+        final ambulanceId = _selectedAmbulance?.id;
+        if (ambulanceId != null) {
+          _refreshMaintenanceSection(ambulanceId);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Enregistrement de maintenance supprimé'),
@@ -2891,6 +3010,10 @@ class _ManagerAmbulancesScreenContentState
     if (mounted) {
       setState(() {
         _ambulancesFuture = _getAllAmbulances();
+        _allMaintenanceRecordsFuture = _getAllMaintenanceRecords();
+        _activeMissionsFuture = _getAllActiveMissions();
+        _allMissionsFuture = _getAllMissions();
+        _refreshSelectedAmbulanceFuturesInState();
       });
     }
   }

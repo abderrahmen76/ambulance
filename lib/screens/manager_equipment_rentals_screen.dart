@@ -5,6 +5,7 @@ import '../models/equipment_rental_model.dart';
 import '../models/user_model.dart';
 import '../services/equipment_rental_service.dart';
 import '../services/api_client.dart';
+import '../services/resume_refresh_service.dart';
 import '../config/constants.dart';
 import './equipment_rental_screen.dart'
     show AddEquipmentRentalDialog, SellEquipmentDialog;
@@ -35,6 +36,11 @@ class _ManagerEquipmentRentalsScreenState
   Map<String, int> _inventoryByEquipmentType = {};
   int _totalOxygenBottles = 0; // Total oxygen bottles in inventory
   Map<String, String> _ambulanceNamesById = {};
+
+  bool get _canSeeMoneySections {
+    final role = widget.user.role?.trim().toLowerCase();
+    return role == 'owner' || role == 'admin' || role == 'super_admin';
+  }
 
   String get _equipmentTypesPrefsKey {
     final tenantId = widget.user.tenantId?.trim();
@@ -78,9 +84,7 @@ class _ManagerEquipmentRentalsScreenState
       _ambulanceNamesById[ambulanceId] ?? ambulanceId;
 
   bool _isSale(EquipmentRental rental) =>
-      rental.transactionType == 'sale' ||
-      (rental.returnDate != null &&
-          rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0]);
+      rental.transactionType.trim().toLowerCase() == 'sale';
 
   Future<void> _showAmbulancePickerDialog({required bool isSale}) async {
     try {
@@ -880,9 +884,10 @@ class _ManagerEquipmentRentalsScreenState
           ),
           const SizedBox(height: 20),
 
-          // Performance Section
-          _buildDynamicPerformancePanel(),
-          const SizedBox(height: 20),
+          if (_canSeeMoneySections) ...[
+            _buildDynamicPerformancePanel(),
+            const SizedBox(height: 20),
+          ],
 
           // Rentals list or empty state
           if (filteredRentals.isEmpty)
@@ -946,7 +951,13 @@ class _ManagerEquipmentRentalsScreenState
     final returnDateFormatted = rental.returnDate?.split(' ')[0] ?? 'N/A';
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey[300]!, width: 1),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -1641,6 +1652,11 @@ class _ManagerEquipmentRentalScreenContentState
   Map<String, int> _inventoryByEquipmentType = {};
   Map<String, String> _ambulanceNamesById = {};
 
+  bool get _canSeeMoneySections {
+    final role = widget.user.role?.trim().toLowerCase();
+    return role == 'owner' || role == 'admin' || role == 'super_admin';
+  }
+
   String get _equipmentTypesPrefsKey {
     final tenantId = widget.user.tenantId?.trim();
     if (tenantId != null && tenantId.isNotEmpty) {
@@ -1653,6 +1669,7 @@ class _ManagerEquipmentRentalScreenContentState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ResumeRefreshService.events.addListener(_handleResumeRefreshEvent);
     _rentalService = EquipmentRentalService();
     _apiClient = ApiClient();
 
@@ -1667,16 +1684,33 @@ class _ManagerEquipmentRentalScreenContentState
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ResumeRefreshService.events.removeListener(_handleResumeRefreshEvent);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      ResumeRefreshService.markBackgrounded();
+    }
+  }
+
+  void _handleResumeRefreshEvent() {
+    final event = ResumeRefreshService.events.value;
+    if (!mounted || event == null) return;
+    if (event.scope != 'manager' || event.activeTabIndex != 3) return;
+
+    if (event.shouldRefreshVisibleImmediately) {
       debugPrint(
-        '[ManagerEquipmentRentalScreenContent] App resumed, reloading rentals...',
+        '[ManagerEquipmentRentalScreenContent] Long resume, refreshing visible tab',
       );
       _loadData();
+    } else {
+      debugPrint(
+        '[ManagerEquipmentRentalScreenContent] Short resume, using cached data',
+      );
     }
   }
 
@@ -1741,9 +1775,7 @@ class _ManagerEquipmentRentalScreenContentState
       _ambulanceNamesById[ambulanceId] ?? ambulanceId;
 
   bool _isSale(EquipmentRental rental) =>
-      rental.transactionType == 'sale' ||
-      (rental.returnDate != null &&
-          rental.returnDate!.split(' ')[0] == rental.rentDate.split(' ')[0]);
+      rental.transactionType.trim().toLowerCase() == 'sale';
 
   Future<void> _showAmbulancePickerDialog({required bool isSale}) async {
     try {
@@ -2785,9 +2817,10 @@ class _ManagerEquipmentRentalScreenContentState
           ),
           const SizedBox(height: 20),
 
-          // Performance Section
-          _buildPerformancePanel(),
-          const SizedBox(height: 20),
+          if (_canSeeMoneySections) ...[
+            _buildPerformancePanel(),
+            const SizedBox(height: 20),
+          ],
 
           // Rentals list or empty state
           if (filteredRentals.isEmpty)
@@ -3037,7 +3070,13 @@ class _ManagerEquipmentRentalScreenContentState
     final returnDateFormatted = rental.returnDate?.split(' ')[0] ?? 'N/A';
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 0,
+      color: Colors.white,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey[300]!, width: 1),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(

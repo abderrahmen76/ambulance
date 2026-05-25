@@ -25,10 +25,7 @@ class ManagerOnboardingService {
   }) async {
     final response = await Supabase.instance.client.functions.invoke(
       'secure_manager_onboarding',
-      headers: {
-        'apikey': SupabaseConfig.anonKey,
-        'x-app-kind': 'mobile_app',
-      },
+      headers: {'apikey': SupabaseConfig.anonKey, 'x-app-kind': 'mobile_app'},
       body: {
         'action': 'start_signup',
         'company_name': companyName,
@@ -46,31 +43,62 @@ class ManagerOnboardingService {
     );
   }
 
-  Future<Map<String, dynamic>> getOnboardingState() async {
-    final response = await Supabase.instance.client.functions.invoke(
-      'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
-        'action': 'get_onboarding_state',
-      },
-    );
+  Future<Map<String, dynamic>> _invokeAuthenticatedFunction(
+    String functionName,
+    Map<String, dynamic> body,
+  ) async {
+    Future<FunctionResponse> invoke({required bool forceRefresh}) async {
+      return Supabase.instance.client.functions.invoke(
+        functionName,
+        headers: await _sessionSecurityService.buildFunctionHeaders(
+          forceRefresh: forceRefresh,
+        ),
+        body: body,
+      );
+    }
 
+    try {
+      final response = await invoke(forceRefresh: false);
+      return _responseMap(response);
+    } on FunctionException catch (error) {
+      if (!_isExpiredSessionError(error)) {
+        rethrow;
+      }
+
+      print(
+        '[ManagerOnboardingService] Session rejected; refreshing and retrying ${body["action"]}',
+      );
+      final response = await invoke(forceRefresh: true);
+      return _responseMap(response);
+    }
+  }
+
+  Map<String, dynamic> _responseMap(FunctionResponse response) {
     return Map<String, dynamic>.from(
       response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
     );
   }
 
-  Future<Map<String, dynamic>> completeManagerSignup() async {
-    final response = await Supabase.instance.client.functions.invoke(
-      'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
-        'action': 'complete_manager_signup',
-      },
-    );
+  bool _isExpiredSessionError(FunctionException error) {
+    final status = '${error.status}';
+    final details = '${error.details}';
+    final message = error.toString();
+    return status == '401' ||
+        details.contains('Invalid or expired session') ||
+        message.contains('Invalid or expired session');
+  }
 
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+  Future<Map<String, dynamic>> getOnboardingState() async {
+    return _invokeAuthenticatedFunction(
+      'secure_manager_onboarding',
+      {'action': 'get_onboarding_state'},
+    );
+  }
+
+  Future<Map<String, dynamic>> completeManagerSignup() async {
+    return _invokeAuthenticatedFunction(
+      'secure_manager_onboarding',
+      {'action': 'complete_manager_signup'},
     );
   }
 
@@ -79,19 +107,14 @@ class ManagerOnboardingService {
     String? telephone,
     String? kilometrage,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'add_ambulance',
         'ambulance_number': ambulanceNumber,
         'telephone': telephone,
         'kilometrage': kilometrage,
       },
-    );
-
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
     );
   }
 
@@ -102,10 +125,9 @@ class ManagerOnboardingService {
     String? driverPhone,
     String? ambulanceId,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'add_driver',
         'driver_name': driverName,
         'driver_email': driverEmail,
@@ -114,23 +136,30 @@ class ManagerOnboardingService {
         'ambulance_id': ambulanceId,
       },
     );
+  }
 
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+  Future<Map<String, dynamic>> addManager({
+    required String managerName,
+    required String managerEmail,
+    required String managerPassword,
+    String? managerPhone,
+  }) async {
+    return _invokeAuthenticatedFunction(
+      'secure_manager_onboarding',
+      {
+        'action': 'add_manager',
+        'manager_name': managerName,
+        'manager_email': managerEmail,
+        'manager_password': managerPassword,
+        'manager_phone': managerPhone,
+      },
     );
   }
 
   Future<Map<String, dynamic>> finishOnboarding() async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
-        'action': 'finish_onboarding',
-      },
-    );
-
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+      {'action': 'finish_onboarding'},
     );
   }
 
@@ -141,22 +170,16 @@ class ManagerOnboardingService {
     String? companyCity,
     String? companyAddress,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'update_company_values',
         'company_name': companyName,
         'company_phones': companyPhones,
-        'company_phone': companyPhones.isNotEmpty ? companyPhones.first : null,
         'company_description': companyDescription,
         'company_city': companyCity,
         'company_address': companyAddress,
       },
-    );
-
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
     );
   }
 
@@ -165,36 +188,44 @@ class ManagerOnboardingService {
     required String driverName,
     required String driverEmail,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'update_driver',
         'driver_id': driverId,
         'driver_name': driverName,
         'driver_email': driverEmail,
       },
     );
+  }
 
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+  Future<Map<String, dynamic>> updateManager({
+    required String managerId,
+    required String managerName,
+    required String managerEmail,
+  }) async {
+    return _invokeAuthenticatedFunction(
+      'secure_manager_onboarding',
+      {
+        'action': 'update_manager',
+        'manager_id': managerId,
+        'manager_name': managerName,
+        'manager_email': managerEmail,
+      },
     );
   }
 
-  Future<Map<String, dynamic>> deleteDriver({
-    required String driverId,
-  }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+  Future<Map<String, dynamic>> deleteManager({required String managerId}) async {
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
-        'action': 'delete_driver',
-        'driver_id': driverId,
-      },
+      {'action': 'delete_manager', 'manager_id': managerId},
     );
+  }
 
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+  Future<Map<String, dynamic>> deleteDriver({required String driverId}) async {
+    return _invokeAuthenticatedFunction(
+      'secure_manager_onboarding',
+      {'action': 'delete_driver', 'driver_id': driverId},
     );
   }
 
@@ -202,18 +233,27 @@ class ManagerOnboardingService {
     required String driverId,
     required String newPassword,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'update_driver_password',
         'driver_id': driverId,
         'new_password': newPassword,
       },
     );
+  }
 
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+  Future<Map<String, dynamic>> updateCompanyUserPassword({
+    required String userId,
+    required String newPassword,
+  }) async {
+    return _invokeAuthenticatedFunction(
+      'secure_users',
+      {
+        'action': 'company_update_user_password',
+        'user_id': userId,
+        'new_password': newPassword,
+      },
     );
   }
 
@@ -221,37 +261,26 @@ class ManagerOnboardingService {
     required String ambulanceId,
     required String ambulanceNumber,
     String? telephone,
+    String? kilometrage,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
+      {
         'action': 'update_ambulance',
         'ambulance_id': ambulanceId,
         'ambulance_number': ambulanceNumber,
         'telephone': telephone,
+        'kilometrage': kilometrage,
       },
-    );
-
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
     );
   }
 
   Future<Map<String, dynamic>> deleteAmbulance({
     required String ambulanceId,
   }) async {
-    final response = await Supabase.instance.client.functions.invoke(
+    return _invokeAuthenticatedFunction(
       'secure_manager_onboarding',
-      headers: await _sessionSecurityService.buildFunctionHeaders(),
-      body: {
-        'action': 'delete_ambulance',
-        'ambulance_id': ambulanceId,
-      },
-    );
-
-    return Map<String, dynamic>.from(
-      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+      {'action': 'delete_ambulance', 'ambulance_id': ambulanceId},
     );
   }
 }

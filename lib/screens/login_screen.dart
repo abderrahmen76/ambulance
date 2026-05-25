@@ -234,7 +234,7 @@ class _LoginScreenState extends State<LoginScreen> {
           Navigator.of(
             context,
           ).pushReplacementNamed('/dashboard', arguments: user);
-        } else if (user.role == 'manager') {
+        } else if (user.role == 'manager' || user.role == 'owner') {
           print('📊 [NAVIGATION] Navigating to manager dashboard...');
           Navigator.of(
             context,
@@ -318,7 +318,6 @@ class _LoginScreenState extends State<LoginScreen> {
               //       ),
               //   textAlign: TextAlign.center,
               // ),
-
               const SizedBox(height: 8),
 
               /// Subtitle
@@ -339,9 +338,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'Email Address',
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -389,9 +388,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   Text(
                     'Password',
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                          color: AppColors.textPrimary,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   TextField(
@@ -539,11 +538,11 @@ class _LoginScreenState extends State<LoginScreen> {
                         )
                       : Text(
                           'Login',
-                          style:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                              ),
                         ),
                 ),
               ),
@@ -557,7 +556,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   onPressed: _isLoading
                       ? null
                       : () =>
-                          Navigator.of(context).pushNamed('/manager-signup'),
+                            Navigator.of(context).pushNamed('/manager-signup'),
                   child: const Text("Creer ma societe d'ambulance"),
                 ),
               ),
@@ -568,9 +567,9 @@ class _LoginScreenState extends State<LoginScreen> {
               Text(
                 'Created by AmbuLink',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppColors.textSecondary,
-                      fontStyle: FontStyle.italic,
-                    ),
+                  color: AppColors.textSecondary,
+                  fontStyle: FontStyle.italic,
+                ),
               ),
             ],
           ),

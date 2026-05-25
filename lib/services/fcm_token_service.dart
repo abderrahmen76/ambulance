@@ -55,7 +55,7 @@ class FCMTokenService {
 
         if (fcmToken != null) {
           debugPrint('📝 [FCMToken] Token received');
-          await _saveFCMTokenToSupabase(user.id!, fcmToken);
+          await _saveFCMTokenToSupabase(user.id, fcmToken);
         }
       } catch (innerError) {
         debugPrint('❌ [FCMToken] Inner error: $innerError');
@@ -146,10 +146,14 @@ class FCMTokenService {
         return;
       }
 
-      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
         debugPrint('🔄 [FCMToken] Token refreshed');
-        // Could update the token in Supabase here if needed
-        // For now, the old token will just expire naturally
+        try {
+          await _saveFCMTokenToSupabase('', newToken);
+          debugPrint('[FCMToken] Refreshed token saved');
+        } catch (e) {
+          debugPrint('[FCMToken] Could not save refreshed token: $e');
+        }
       });
 
       debugPrint('✅ [FCMToken] Listening for token refresh');

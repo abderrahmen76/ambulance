@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart'
     show Supabase, SupabaseClient;
 
 import '../models/user_model.dart';
+import 'session_security_service.dart';
 
 class ShiftScheduleService {
   ShiftScheduleService._internal();
@@ -13,20 +14,28 @@ class ShiftScheduleService {
   factory ShiftScheduleService() => _instance;
 
   final SupabaseClient _supabase = Supabase.instance.client;
+  final SessionSecurityService _sessionSecurityService =
+      SessionSecurityService();
 
   Future<List<DriverShiftSchedule>> fetchTenantSchedules(
     String tenantId,
   ) async {
-    final rows = await _supabase
-        .from('driver_shift_schedules')
-        .select()
-        .eq('tenant_id', tenantId)
-        .eq('is_active', true)
-        .order('created_at', ascending: false);
+    final response = await _supabase.functions.invoke(
+      'secure_manager_onboarding',
+      headers: await _sessionSecurityService.buildFunctionHeaders(),
+      body: {
+        'action': 'fetch_shift_schedules',
+        'tenant_id': tenantId,
+      },
+    );
+    final data = Map<String, dynamic>.from(
+      response.data as Map<String, dynamic>? ?? const <String, dynamic>{},
+    );
+    final rows = List<Map<String, dynamic>>.from(
+      data['schedules'] as List? ?? const [],
+    );
 
-    return List<Map<String, dynamic>>.from(
-      rows,
-    ).map(DriverShiftSchedule.fromJson).toList();
+    return rows.map(DriverShiftSchedule.fromJson).toList();
   }
 
   Future<List<DriverShiftSchedule>> fetchDriverSchedules({
@@ -68,31 +77,29 @@ class ShiftScheduleService {
     required String endTime,
     bool autoStartTracking = true,
   }) async {
-    final insertRows = await _supabase
-        .from('driver_shift_schedules')
-        .insert({
-          'tenant_id': tenantId,
-          'driver_user_id': driver.id,
-          'driver_name': driver.name,
-          'recurrence_type': recurrence.name,
-          'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
-          'shift_label': shiftLabel,
-          'schedule_type': scheduleType,
-          'absence_reason': absenceReason,
-          'starts_on': _dateOnly(startsOn),
-          'ends_on': endsOn == null ? null : _dateOnly(endsOn),
-          'start_time': startTime,
-          'end_time': endTime,
-          'auto_start_tracking': autoStartTracking,
-          'is_active': true,
-          'created_by': createdBy,
-        })
-        .select()
-        .limit(1);
-
-    return DriverShiftSchedule.fromJson(
-      List<Map<String, dynamic>>.from(insertRows).first,
+    final response = await _supabase.functions.invoke(
+      'secure_manager_onboarding',
+      headers: await _sessionSecurityService.buildFunctionHeaders(),
+      body: {
+        'action': 'create_shift_schedule',
+        'tenant_id': tenantId,
+        'driver_user_id': driver.id,
+        'driver_name': driver.name,
+        'recurrence_type': recurrence.name,
+        'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
+        'shift_label': shiftLabel,
+        'schedule_type': scheduleType,
+        'absence_reason': absenceReason,
+        'starts_on': _dateOnly(startsOn),
+        'ends_on': endsOn == null ? null : _dateOnly(endsOn),
+        'start_time': startTime,
+        'end_time': endTime,
+        'auto_start_tracking': autoStartTracking,
+        'created_by': createdBy,
+      },
     );
+
+    return DriverShiftSchedule.fromJson(_extractSchedule(response.data));
   }
 
   Future<DriverShiftSchedule> updateSchedule({
@@ -109,39 +116,38 @@ class ShiftScheduleService {
     required bool autoStartTracking,
     required bool isActive,
   }) async {
-    final rows = await _supabase
-        .from('driver_shift_schedules')
-        .update({
-          'shift_label': shiftLabel,
-          'schedule_type': scheduleType,
-          'absence_reason': absenceReason,
-          'recurrence_type': recurrence.name,
-          'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
-          'starts_on': _dateOnly(startsOn),
-          'ends_on': endsOn == null ? null : _dateOnly(endsOn),
-          'start_time': startTime,
-          'end_time': endTime,
-          'auto_start_tracking': autoStartTracking,
-          'is_active': isActive,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', scheduleId)
-        .select()
-        .limit(1);
-
-    return DriverShiftSchedule.fromJson(
-      List<Map<String, dynamic>>.from(rows).first,
+    final response = await _supabase.functions.invoke(
+      'secure_manager_onboarding',
+      headers: await _sessionSecurityService.buildFunctionHeaders(),
+      body: {
+        'action': 'update_shift_schedule',
+        'schedule_id': scheduleId,
+        'shift_label': shiftLabel,
+        'schedule_type': scheduleType,
+        'absence_reason': absenceReason,
+        'recurrence_type': recurrence.name,
+        'weekday': recurrence == ShiftRecurrence.weekly ? weekday : null,
+        'starts_on': _dateOnly(startsOn),
+        'ends_on': endsOn == null ? null : _dateOnly(endsOn),
+        'start_time': startTime,
+        'end_time': endTime,
+        'auto_start_tracking': autoStartTracking,
+        'is_active': isActive,
+      },
     );
+
+    return DriverShiftSchedule.fromJson(_extractSchedule(response.data));
   }
 
   Future<void> deactivateSchedule(String scheduleId) async {
-    await _supabase
-        .from('driver_shift_schedules')
-        .update({
-          'is_active': false,
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', scheduleId);
+    await _supabase.functions.invoke(
+      'secure_manager_onboarding',
+      headers: await _sessionSecurityService.buildFunctionHeaders(),
+      body: {
+        'action': 'deactivate_shift_schedule',
+        'schedule_id': scheduleId,
+      },
+    );
   }
 
   DriverShiftSchedule? findActiveSchedule(
@@ -231,6 +237,15 @@ class ShiftScheduleService {
   }
 
   String _dateOnly(DateTime date) => date.toIso8601String().split('T').first;
+
+  Map<String, dynamic> _extractSchedule(Object? responseData) {
+    final data = Map<String, dynamic>.from(
+      responseData as Map<String, dynamic>? ?? const <String, dynamic>{},
+    );
+    return Map<String, dynamic>.from(
+      data['schedule'] as Map<String, dynamic>? ?? const <String, dynamic>{},
+    );
+  }
 }
 
 enum ShiftRecurrence { daily, weekly }

@@ -1,9 +1,13 @@
 ﻿
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/constants.dart';
 import '../models/ambulance_model.dart';
 import 'api_client.dart';
+import 'app_memory_cache_service.dart';
+import 'fleet_tracking/background_location_service.dart';
+import 'fleet_tracking/fleet_tracking_service.dart';
 import 'tracking_presence_service.dart';
 
 /// Ambulance Service
@@ -18,6 +22,9 @@ class AmbulanceService {
   Ambulance? _cachedAmbulance;
   String? _cachedUserId;
   String? _cachedTenantId;
+
+  static String _releasedFallbackKey(String driverId, String? tenantId) =>
+      'released_fallback_ambulance:${tenantId ?? ''}:$driverId';
 
   factory AmbulanceService() {
     return _instance;
@@ -77,8 +84,20 @@ class AmbulanceService {
         );
 
         if (tenantAmbulances.length == 1) {
+          final fallback = Ambulance.fromJson(tenantAmbulances.first);
+          if (await _isFallbackReleased(
+            driverId: driverId,
+            tenantId: tenantId,
+            ambulanceId: fallback.id,
+          )) {
+            _cachedAmbulance = null;
+            _cachedUserId = driverId;
+            _cachedTenantId = tenantId;
+            return null;
+          }
+
           return _cacheAmbulance(
-            Ambulance.fromJson(tenantAmbulances.first),
+            fallback,
             driverId: driverId,
             tenantId: tenantId,
           );
@@ -144,9 +163,12 @@ class AmbulanceService {
   /// Get all ambulances (admin view)
   Future<List<Ambulance>> getAllAmbulances() async {
     try {
-      final ambulances = await _apiClient.get(
-        SupabaseConfig.ambulancesTable,
-      );
+      const cacheKey = 'all';
+      final ambulances = AmbulanceCache.list.get(cacheKey) ??
+          await _apiClient.get(
+            SupabaseConfig.ambulancesTable,
+          );
+      AmbulanceCache.list.set(cacheKey, ambulances);
 
       return ambulances.map((json) => Ambulance.fromJson(json)).toList();
     } catch (e) {
@@ -160,12 +182,15 @@ class AmbulanceService {
     required String tenantId,
   }) async {
     try {
-      final ambulances = await _apiClient.get(
-        SupabaseConfig.ambulancesTable,
-        filters: {
-          'tenant_id': 'eq.$tenantId',
-        },
-      );
+      final cacheKey = 'tenant:$tenantId';
+      final ambulances = AmbulanceCache.list.get(cacheKey) ??
+          await _apiClient.get(
+            SupabaseConfig.ambulancesTable,
+            filters: {
+              'tenant_id': 'eq.$tenantId',
+            },
+          );
+      AmbulanceCache.list.set(cacheKey, ambulances);
 
       return ambulances
           .map((json) => Ambulance.fromJson(json))
@@ -239,6 +264,7 @@ class AmbulanceService {
         );
       }
 
+      await _clearReleasedFallback(driverId: driverId, tenantId: tenantId);
       clearCache();
     } catch (e) {
       rethrow;
@@ -249,6 +275,7 @@ class AmbulanceService {
   Future<void> releaseAmbulanceFromDriver({
     required String ambulanceId,
     String? driverId,
+    String? tenantId,
   }) async {
     try {
       if (driverId != null && driverId.isNotEmpty) {
@@ -257,6 +284,37 @@ class AmbulanceService {
         if (activeClaim != null && activeClaim.ambulanceId == ambulanceId) {
           await TrackingPresenceService().releaseClaim();
         }
+        await _stopAmbulanceTrackingRuntime();
+      }
+
+      final selectedRows = await _apiClient.get(
+        SupabaseConfig.ambulancesTable,
+        filters: {'id': 'eq.$ambulanceId'},
+        limit: 1,
+      );
+      final currentDriverId = selectedRows.isNotEmpty
+          ? Ambulance.fromJson(selectedRows.first).currentDriverId
+          : null;
+
+      if (driverId == null ||
+          driverId.isEmpty ||
+          currentDriverId == null ||
+          currentDriverId.isEmpty) {
+        if (driverId != null && driverId.isNotEmpty) {
+          await _markFallbackReleased(
+            driverId: driverId,
+            tenantId: tenantId,
+            ambulanceId: ambulanceId,
+          );
+        }
+        clearCache();
+        return;
+      }
+
+      if (currentDriverId != driverId) {
+        throw Exception(
+          'Cette ambulance est affectée à un autre conducteur.',
+        );
       }
 
       final updatedRow = await _supabase
@@ -280,6 +338,45 @@ class AmbulanceService {
     }
   }
 
+  Future<bool> _isFallbackReleased({
+    required String driverId,
+    required String? tenantId,
+    required String ambulanceId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_releasedFallbackKey(driverId, tenantId)) ==
+        ambulanceId;
+  }
+
+  Future<void> _markFallbackReleased({
+    required String driverId,
+    required String? tenantId,
+    required String ambulanceId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_releasedFallbackKey(driverId, tenantId), ambulanceId);
+  }
+
+  Future<void> _clearReleasedFallback({
+    required String driverId,
+    required String? tenantId,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_releasedFallbackKey(driverId, tenantId));
+  }
+
+  Future<void> _stopAmbulanceTrackingRuntime() async {
+    try {
+      await FleetTrackingService().stopTracking();
+    } catch (_) {}
+
+    try {
+      if (await BackgroundLocationService.isServiceRunning()) {
+        await BackgroundLocationService.stopBackgroundService();
+      }
+    } catch (_) {}
+  }
+
   /// Update ambulance current location/status
   Future<void> updateAmbulanceStatus({
     required String ambulanceId,
@@ -297,9 +394,7 @@ class AmbulanceService {
       );
 
       // Invalidate cache
-      _cachedAmbulance = null;
-      _cachedUserId = null;
-      _cachedTenantId = null;
+      clearCache();
     } catch (e) {
       rethrow;
     }
@@ -310,6 +405,8 @@ class AmbulanceService {
     _cachedAmbulance = null;
     _cachedUserId = null;
     _cachedTenantId = null;
+    AmbulanceCache.list.clear();
+    AmbulanceCache.byId.clear();
   }
 }
 

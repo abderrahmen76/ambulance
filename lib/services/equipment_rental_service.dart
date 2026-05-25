@@ -36,6 +36,43 @@ class EquipmentRentalService {
   bool _isUnsupportedActionError(Object error) =>
       error.toString().contains('Unsupported action');
 
+  bool _isSale(EquipmentRental rental) =>
+      rental.transactionType.trim().toLowerCase() == 'sale';
+
+  bool _isActiveRental(EquipmentRental rental) =>
+      !_isInventoryMetadata(rental.metadata) &&
+      !_isSale(rental) &&
+      rental.isReturned != true;
+
+  Future<int> getAvailableEquipmentQuantity(String equipmentType) async {
+    final canonicalType = _canonicalEquipmentType(equipmentType);
+    final inventories = await getEquipmentInventories();
+    final inventoryQuantity = inventories[canonicalType] ?? 0;
+    final rentals = await getTenantEquipmentRentals();
+    final rentedQuantity = rentals
+        .where(
+          (rental) =>
+              _isActiveRental(rental) &&
+              _canonicalEquipmentType(rental.equipmentType) == canonicalType,
+        )
+        .fold<int>(0, (sum, rental) => sum + rental.quantity);
+
+    final available = inventoryQuantity - rentedQuantity;
+    return available < 0 ? 0 : available;
+  }
+
+  Future<void> _assertEnoughAvailableStock({
+    required String equipmentType,
+    required int quantity,
+  }) async {
+    final availableQuantity = await getAvailableEquipmentQuantity(equipmentType);
+    if (quantity > availableQuantity) {
+      throw Exception(
+        'Stock insuffisant pour ${_canonicalEquipmentType(equipmentType)}. Disponible: $availableQuantity',
+      );
+    }
+  }
+
   Future<List<EquipmentRental>> getAmbulanceEquipmentRentals(
     String ambulanceId,
   ) async {
@@ -224,6 +261,11 @@ class EquipmentRentalService {
     int quantity = 1,
   }) async {
     try {
+      await _assertEnoughAvailableStock(
+        equipmentType: equipmentType,
+        quantity: quantity,
+      );
+
       final rentalId = const Uuid().v4();
       final now = DateTime.now().toIso8601String();
 
@@ -305,9 +347,11 @@ class EquipmentRentalService {
     String? patientPhoneNumber,
     String? returnDate,
     double? cost,
+    int? quantity,
     String? notes,
   }) async {
     final updateData = <String, dynamic>{};
+    EquipmentRental? existingRental;
 
     if (ambulancierName != null) {
       updateData['ambulancier_name'] = ambulancierName;
@@ -327,6 +371,40 @@ class EquipmentRentalService {
     if (cost != null) {
       updateData['cost'] = cost;
     }
+    if (quantity != null) {
+      if (quantity < 1) {
+        throw Exception('La quantité doit être au moins 1');
+      }
+
+      try {
+        for (final rental in await getTenantEquipmentRentals()) {
+          if (rental.id == rentalId) {
+            existingRental = rental;
+            break;
+          }
+        }
+      } catch (_) {
+        existingRental = null;
+      }
+
+      if (existingRental != null) {
+        final availableQuantity = await getAvailableEquipmentQuantity(
+          existingRental.equipmentType,
+        );
+        final maxAllowed = (_isActiveRental(existingRental) ||
+                _isSale(existingRental))
+            ? existingRental.quantity + availableQuantity
+            : availableQuantity;
+
+        if (quantity > maxAllowed) {
+          throw Exception(
+            'Stock insuffisant pour ${_canonicalEquipmentType(existingRental.equipmentType)}. Disponible: $maxAllowed',
+          );
+        }
+      }
+
+      updateData['quantity'] = quantity;
+    }
     if (notes != null) {
       updateData['notes'] = notes;
     }
@@ -336,6 +414,21 @@ class EquipmentRentalService {
     }
 
     await updateRentalFieldMap(rentalId, updateData);
+
+    if (quantity != null &&
+        existingRental != null &&
+        _isSale(existingRental) &&
+        quantity != existingRental.quantity) {
+      final canonicalType = _canonicalEquipmentType(existingRental.equipmentType);
+      final delta = quantity - existingRental.quantity;
+      final inventories = await getEquipmentInventories();
+      final currentQuantity = inventories[canonicalType] ?? 0;
+      final adjustedQuantity = currentQuantity - delta;
+      inventories[canonicalType] = adjustedQuantity < 0
+          ? 0
+          : adjustedQuantity;
+      await setEquipmentInventories(inventories);
+    }
   }
 
   Future<void> updateRentalFieldMap(
@@ -355,10 +448,35 @@ class EquipmentRentalService {
 
   Future<void> deleteRental(String rentalId) async {
     try {
+      EquipmentRental? rentalToDelete;
+      try {
+        final rentals = await getTenantEquipmentRentals();
+        for (final rental in rentals) {
+          if (rental.id == rentalId) {
+            rentalToDelete = rental;
+            break;
+          }
+        }
+      } catch (_) {
+        rentalToDelete = null;
+      }
+
       await Supabase.instance.client.functions.invoke(
         'secure_equipment_rentals',
         body: {'action': 'delete', 'rental_id': rentalId},
       );
+
+      if (rentalToDelete != null &&
+          _isSale(rentalToDelete) &&
+          !_isInventoryMetadata(rentalToDelete.metadata)) {
+        final canonicalType = _canonicalEquipmentType(
+          rentalToDelete.equipmentType,
+        );
+        final inventories = await getEquipmentInventories();
+        inventories[canonicalType] =
+            (inventories[canonicalType] ?? 0) + rentalToDelete.quantity;
+        await setEquipmentInventories(inventories);
+      }
     } catch (e) {
       debugPrint('❌ [EquipmentRental] Error deleting rental: $e');
       rethrow;
@@ -378,6 +496,11 @@ class EquipmentRentalService {
     int quantity = 1,
   }) async {
     try {
+      await _assertEnoughAvailableStock(
+        equipmentType: equipmentType,
+        quantity: quantity,
+      );
+
       final saleId = const Uuid().v4();
       final now = DateTime.now().toIso8601String();
 

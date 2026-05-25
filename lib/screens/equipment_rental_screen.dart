@@ -28,6 +28,17 @@ String _canonicalEquipmentTypeLabel(String value) {
   return trimmed;
 }
 
+String _friendlyEquipmentError(Object error) {
+  final raw = error.toString();
+  final cleaned = raw
+      .replaceFirst(RegExp(r'^Exception:\s*'), '')
+      .replaceFirst(RegExp(r'^ApiException:\s*'), '');
+  if (cleaned.toLowerCase().contains('stock insuffisant')) {
+    return cleaned;
+  }
+  return 'Erreur: $cleaned';
+}
+
 List<String> _buildEquipmentTypeOptions({
   required List<String> stockTypes,
   required List<String> fallbackTypes,
@@ -311,6 +322,9 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
       text: rental.patientAddress ?? '',
     );
     final costCtrl = TextEditingController(text: rental.cost.toString());
+    final quantityCtrl = TextEditingController(
+      text: rental.quantity.toString(),
+    );
     final notesCtrl = TextEditingController(text: rental.notes ?? '');
     final returnDateCtrl = TextEditingController(
       text: rental.returnDate?.split(' ')[0] ?? '',
@@ -400,6 +414,20 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
               ),
               const SizedBox(height: 12),
 
+              // Quantity
+              TextFormField(
+                controller: quantityCtrl,
+                keyboardType: TextInputType.number,
+                decoration: InputDecoration(
+                  labelText: 'Quantité',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  hintText: '1',
+                ),
+              ),
+              const SizedBox(height: 12),
+
               // Cost
               TextFormField(
                 controller: costCtrl,
@@ -438,6 +466,18 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
           ElevatedButton(
             onPressed: () async {
               try {
+                final quantity = int.tryParse(quantityCtrl.text.trim());
+                if (quantity == null || quantity < 1) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('La quantité doit être au moins 1'),
+                      backgroundColor: Colors.red,
+                      duration: Duration(seconds: 3),
+                    ),
+                  );
+                  return;
+                }
+
                 // Update rental with all new values
                 await _rentalService.updateEquipmentRental(
                   rentalId: rental.id,
@@ -450,6 +490,7 @@ class _EquipmentRentalScreenState extends State<EquipmentRentalScreen> {
                       : patientAddressCtrl.text,
                   returnDate: returnDateCtrl.text,
                   cost: double.tryParse(costCtrl.text) ?? rental.cost,
+                  quantity: quantity,
                   notes: notesCtrl.text.isEmpty ? null : notesCtrl.text,
                 );
 
@@ -1037,6 +1078,8 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
   bool _isLoading = false;
   int _quantity = 1; // Quantity of items being rented
   List<String> _stockEquipmentTypes = [];
+  Map<String, int> _inventoryByEquipmentType = {};
+  bool _isRefreshingAvailableStock = false;
 
   late TextEditingController _rentDateController;
   late TextEditingController _returnDateController;
@@ -1076,6 +1119,7 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
       if (!mounted) return;
       setState(() {
         _stockEquipmentTypes = inventories.keys.toList();
+        _inventoryByEquipmentType = inventories;
       });
     } catch (e) {
       debugPrint('Error loading stock equipment types: $e');
@@ -1092,6 +1136,40 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
       ...teammateNames,
     ].join(', ');
     _ambulancierController.text = _ambulancierName;
+  }
+
+  int _availableStockForSelection() {
+    final selectedType = _selectedEquipment == 'Autre'
+        ? _customEquipment
+        : (_selectedEquipment ?? '');
+    final canonicalType = _canonicalEquipmentTypeLabel(selectedType);
+    if (canonicalType.isEmpty) return 0;
+    return _inventoryByEquipmentType[canonicalType] ?? 0;
+  }
+
+  Future<void> _refreshAvailableStockForSelection() async {
+    final selectedType = _selectedEquipment == 'Autre'
+        ? _customEquipment
+        : (_selectedEquipment ?? '');
+    if (selectedType.trim().isEmpty) return;
+
+    setState(() => _isRefreshingAvailableStock = true);
+    try {
+      final available = await widget.rentalService.getAvailableEquipmentQuantity(
+        selectedType,
+      );
+      final canonicalType = _canonicalEquipmentTypeLabel(selectedType);
+      if (!mounted || canonicalType.isEmpty) return;
+      setState(() {
+        _inventoryByEquipmentType[canonicalType] = available;
+      });
+    } catch (e) {
+      debugPrint('Error refreshing available equipment stock: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingAvailableStock = false);
+      }
+    }
   }
 
   @override
@@ -1159,7 +1237,7 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erreur: ${e.toString()}'),
+              content: Text(_friendlyEquipmentError(e)),
               backgroundColor: Colors.red,
             ),
           );
@@ -1204,12 +1282,32 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                         setState(() {
                           _selectedEquipment = value;
                         });
+                        _refreshAvailableStockForSelection();
                       }
                     : null,
                 validator: (value) =>
                     value == null ? 'Sélectionnez un équipement' : null,
               ),
               const SizedBox(height: 12),
+
+              if (_inventoryByEquipmentType.isNotEmpty &&
+                  _selectedEquipment != null &&
+                  _selectedEquipment != 'Autre')
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Stock disponible: ${_availableStockForSelection()}',
+                      style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                    ),
+                  ),
+                ),
+              if (_isRefreshingAvailableStock)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
 
               // Custom equipment if "Autre" selected
               if (_selectedEquipment == 'Autre')
@@ -1224,8 +1322,10 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                       ),
                     ),
                     enabled: !_isLoading,
-                    onChanged: (value) =>
-                        setState(() => _customEquipment = value),
+                    onChanged: (value) {
+                      setState(() => _customEquipment = value);
+                      _refreshAvailableStockForSelection();
+                    },
                     validator: (value) =>
                         value?.isEmpty ?? true ? 'Entrez le type' : null,
                   ),
@@ -1413,6 +1513,10 @@ class _AddEquipmentRentalDialogState extends State<AddEquipmentRentalDialog> {
                   if (qty == null || qty < 1) {
                     return 'La quantité doit être au moins 1';
                   }
+                  if (_inventoryByEquipmentType.isNotEmpty &&
+                      qty > _availableStockForSelection()) {
+                    return 'Stock insuffisant';
+                  }
                   return null;
                 },
               ),
@@ -1514,6 +1618,8 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
   bool _isLoading = false;
   int _quantity = 1;
   List<String> _stockEquipmentTypes = [];
+  Map<String, int> _inventoryByEquipmentType = {};
+  bool _isRefreshingAvailableStock = false;
 
   late TextEditingController _saleDateController;
   late TextEditingController _quantityController;
@@ -1544,6 +1650,7 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
       if (!mounted) return;
       setState(() {
         _stockEquipmentTypes = inventories.keys.toList();
+        _inventoryByEquipmentType = inventories;
       });
     } catch (e) {
       debugPrint('Error loading stock equipment types: $e');
@@ -1560,6 +1667,40 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
       ...teammateNames,
     ].join(', ');
     _ambulancierController.text = _ambulancierName;
+  }
+
+  int _availableStockForSelection() {
+    final selectedType = _selectedEquipment == 'Autre'
+        ? _customEquipment
+        : (_selectedEquipment ?? '');
+    final canonicalType = _canonicalEquipmentTypeLabel(selectedType);
+    if (canonicalType.isEmpty) return 0;
+    return _inventoryByEquipmentType[canonicalType] ?? 0;
+  }
+
+  Future<void> _refreshAvailableStockForSelection() async {
+    final selectedType = _selectedEquipment == 'Autre'
+        ? _customEquipment
+        : (_selectedEquipment ?? '');
+    if (selectedType.trim().isEmpty) return;
+
+    setState(() => _isRefreshingAvailableStock = true);
+    try {
+      final available = await widget.rentalService.getAvailableEquipmentQuantity(
+        selectedType,
+      );
+      final canonicalType = _canonicalEquipmentTypeLabel(selectedType);
+      if (!mounted || canonicalType.isEmpty) return;
+      setState(() {
+        _inventoryByEquipmentType[canonicalType] = available;
+      });
+    } catch (e) {
+      debugPrint('Error refreshing available equipment stock: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingAvailableStock = false);
+      }
+    }
   }
 
   @override
@@ -1623,7 +1764,7 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Erreur: ${e.toString()}'),
+              content: Text(_friendlyEquipmentError(e)),
               backgroundColor: Colors.red,
             ),
           );
@@ -1668,11 +1809,30 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                         setState(() {
                           _selectedEquipment = value;
                         });
+                        _refreshAvailableStockForSelection();
                       }
                     : null,
                 validator: (value) =>
                     value == null ? 'Sélectionnez un équipement' : null,
               ),
+              if (_inventoryByEquipmentType.isNotEmpty &&
+                  _selectedEquipment != null &&
+                  _selectedEquipment != 'Autre')
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Stock disponible: ${_availableStockForSelection()}',
+                      style: TextStyle(color: Colors.grey[700], fontSize: 12),
+                    ),
+                  ),
+                ),
+              if (_isRefreshingAvailableStock)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
               const SizedBox(height: 12),
 
               // Custom equipment if "Autre" selected
@@ -1688,8 +1848,10 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                       ),
                     ),
                     enabled: !_isLoading,
-                    onChanged: (value) =>
-                        setState(() => _customEquipment = value),
+                    onChanged: (value) {
+                      setState(() => _customEquipment = value);
+                      _refreshAvailableStockForSelection();
+                    },
                     validator: (value) =>
                         value?.isEmpty ?? true ? 'Entrez le type' : null,
                   ),
@@ -1835,6 +1997,10 @@ class _SellEquipmentDialogState extends State<SellEquipmentDialog> {
                   final qty = int.tryParse(value ?? '');
                   if (qty == null || qty < 1) {
                     return 'La quantité doit être au moins 1';
+                  }
+                  if (_inventoryByEquipmentType.isNotEmpty &&
+                      qty > _availableStockForSelection()) {
+                    return 'Stock insuffisant';
                   }
                   return null;
                 },

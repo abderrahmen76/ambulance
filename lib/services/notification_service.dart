@@ -1,4 +1,5 @@
 ﻿import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -8,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../config/constants.dart';
 import 'location_request_service.dart';
 import 'notification_app_service.dart';
+import 'performance_log_service.dart';
+import 'realtime_event_bus_service.dart';
 import 'jwt_helper.dart';
 
 String _safeNotificationType(RemoteMessage message) =>
@@ -68,6 +71,14 @@ String? _extractTenantIdFromData(Map<String, dynamic> data) {
 /// Must be a top-level function for FCM to work
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+  } catch (e) {
+    debugPrint('[FCM] Firebase background init skipped/failed: $e');
+  }
+  await NotificationService.instance.ensureReadyForBackground();
+
   debugPrint(
     '[FCM] Background message received: id=${message.messageId} type=${_safeNotificationType(message)}',
   );
@@ -98,7 +109,7 @@ class NotificationService {
 
   // Deduplication cache to prevent showing same notification twice
   final Set<String> _recentNotificationIds = {};
-  static const int _DEDUPE_WINDOW_MS = 3000; // 3 second window
+  static const int _dedupeWindowMs = 3000; // 3 second window
 
   // Flag to ensure channel is only created once
   bool _channelsInitialized = false;
@@ -115,6 +126,7 @@ class NotificationService {
 
   /// Initialize Firebase Messaging and Local Notifications
   Future<void> initialize() async {
+    final trace = PerformanceLog.start('notification init');
     try {
       debugPrint('[NotificationService] Initializing...');
 
@@ -131,6 +143,10 @@ class NotificationService {
 
       debugPrint(
           '[NotificationService] User notification permission: ${settings.authorizationStatus}');
+      trace.checkpoint(
+        'permission',
+        meta: {'status': settings.authorizationStatus.name},
+      );
 
       // Set FCM background message handler
       FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
@@ -153,6 +169,7 @@ class NotificationService {
             debugPrint('[FCM] Foreground notification skipped due to tenant mismatch');
             return;
           }
+          _emitMissionRefreshFromNotification(message.data);
           _showLocalNotification(message);
         });
       });
@@ -168,6 +185,7 @@ class NotificationService {
             debugPrint('[FCM] Terminated-state notification tap ignored due to tenant mismatch');
             return;
           }
+          _emitMissionRefreshFromNotification(message.data);
           _handleNotificationTap(message.data);
         }
       });
@@ -180,19 +198,41 @@ class NotificationService {
           debugPrint('[FCM] Background notification tap ignored due to tenant mismatch');
           return;
         }
+        _emitMissionRefreshFromNotification(message.data);
         _handleNotificationTap(message.data);
       });
 
-      // Initialize local notifications
-      _initializeLocalNotifications();
+      // Initialize local notifications before any message can be displayed.
+      await _initializeLocalNotifications();
+      trace.checkpoint('local_notifications_ready');
 
       // Get and store FCM token
       await getFcmToken();
+      trace.checkpoint('fcm_token_ready');
 
       debugPrint('[NotificationService] Initialization complete!');
+      trace.end();
     } catch (e) {
       debugPrint('[NotificationService] Error initializing: $e');
+      trace.end(meta: {'error': e.runtimeType});
     }
+  }
+
+  void _emitMissionRefreshFromNotification(Map<String, dynamic> data) {
+    final type = (data['type'] ?? '').toString();
+    final normalizedType = type.toLowerCase();
+    const missionTypes = {
+      'mission_created',
+      'mission_assigned',
+      'mission_status_update',
+      'mission_broadcast',
+      'critical_mission',
+    };
+    if (!missionTypes.contains(normalizedType)) return;
+
+    RealtimeEventBusService.instance.emit(
+      RealtimeAppEvent.missionRefreshRequested(type),
+    );
   }
 
   /// Initialize Flutter Local Notifications
@@ -273,24 +313,30 @@ class NotificationService {
             .catchError((e) =>
                 debugPrint('[NotificationService] V3 channel deletion: $e'));
 
+        await _localNotifications
+            .resolvePlatformSpecificImplementation<
+                AndroidFlutterLocalNotificationsPlugin>()
+            ?.deleteNotificationChannel('ambulance_channel_v4')
+            .catchError((e) =>
+                debugPrint('[NotificationService] V4 channel deletion: $e'));
+
         debugPrint(
             '[NotificationService] ðŸ§¹ Cleaned up old notification channels');
 
         // Wait a moment for deletion to complete
         await Future.delayed(const Duration(milliseconds: 500));
 
-        // Create notification channel with sound for ALL notifications
+        // Create a simple reliable channel for ALL notifications.
         await _localNotifications
             .resolvePlatformSpecificImplementation<
                 AndroidFlutterLocalNotificationsPlugin>()
             ?.createNotificationChannel(
               AndroidNotificationChannel(
-                'ambulance_channel_v4',
+                'ambulance_channel_reliable_v1',
                 'Ambulance Notifications',
-                description: 'All ambulance notifications with custom sound',
+                description: 'All ambulance notifications',
                 importance: Importance.max,
                 playSound: true,
-                sound: RawResourceAndroidNotificationSound('ambulance_alert'),
                 enableVibration: true,
                 showBadge: true,
               ),
@@ -311,6 +357,15 @@ class NotificationService {
     }
 
     debugPrint('[NotificationService] Local notifications initialized');
+  }
+
+  /// Background isolates do not reuse the main isolate plugin initialization.
+  Future<void> ensureReadyForBackground() async {
+    try {
+      await _initializeLocalNotifications();
+    } catch (e) {
+      debugPrint('[NotificationService] Background notification init failed: $e');
+    }
   }
 
   /// Get FCM Token and store in Supabase
@@ -398,7 +453,7 @@ class NotificationService {
       // Check if we've already shown this notification recently
       if (_recentNotificationIds.contains(notificationId)) {
         debugPrint(
-            '[NotificationService] âš ï¸  DUPLICATE BLOCKED: $notificationId already shown in last ${_DEDUPE_WINDOW_MS}ms');
+            '[NotificationService] âš ï¸  DUPLICATE BLOCKED: $notificationId already shown in last ${_dedupeWindowMs}ms');
         return;
       }
 
@@ -408,46 +463,28 @@ class NotificationService {
           '[NotificationService] âœ… Showing notification: $notificationId');
 
       // Schedule cleanup after dedup window
-      Future.delayed(Duration(milliseconds: _DEDUPE_WINDOW_MS), () {
+      Future.delayed(Duration(milliseconds: _dedupeWindowMs), () {
         _recentNotificationIds.remove(notificationId);
         debugPrint(
             '[NotificationService] ðŸ§¹ Cleaned dedupe cache: $notificationId');
       });
 
-      // Use single channel for ALL notification types
-      const channelId = 'ambulance_channel_v4';
+      // Use a simple channel with Android's default sound for reliability.
+      const channelId = 'ambulance_channel_reliable_v1';
       debugPrint(
           '[NotificationService] ðŸ“¢ Using channel: $channelId (for $notificationType)');
-
-      // Get cached sound path (or fall back to built-in)
-      final soundPath = await getNotificationSoundPath();
-
-      // Build Android notification sound based on availability
-      AndroidNotificationSound androidSound;
-      if (soundPath != 'ambulance_alert') {
-        // Using cached file from Supabase
-        debugPrint('[NotificationService] ðŸŽµ Using CACHED sound: $soundPath');
-        androidSound = UriAndroidNotificationSound(soundPath);
-      } else {
-        // Using built-in resource
-        debugPrint(
-            '[NotificationService] ðŸŽµ Using BUILT-IN sound: ambulance_alert');
-        androidSound =
-            const RawResourceAndroidNotificationSound('ambulance_alert');
-      }
 
       // Build Android notification details with runtime values
       final AndroidNotificationDetails androidDetails =
           AndroidNotificationDetails(
         channelId,
         'Ambulance Notifications',
-        channelDescription: 'All ambulance notifications with custom sound',
+        channelDescription: 'All ambulance notifications',
         importance: Importance.max,
         priority: Priority.high,
         showWhen: true,
         enableVibration: true,
-        // Use sound from cached file or built-in
-        sound: androidSound,
+        playSound: true,
         // Small notification icon - ambulance medical cross
         icon: '@drawable/notification_icon',
         // Ambulance blue color for the notification bar
@@ -476,9 +513,8 @@ class NotificationService {
       );
 
       debugPrint(
-          '[NotificationService] ðŸ“¤ About to display notification with custom sound');
-      debugPrint(
-          '[NotificationService] ðŸ“‹ Channel: $channelId | Sound: ambulance_alert.mp3');
+          '[NotificationService] ðŸ“¤ About to display notification');
+      debugPrint('[NotificationService] ðŸ“‹ Channel: $channelId');
 
       await _localNotifications.show(
         message.hashCode,
@@ -626,26 +662,10 @@ class NotificationService {
     }
   }
 
-  /// Get device type (Android/iOS)
-  String _getDeviceType() {
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      return 'android';
-    } else if (defaultTargetPlatform == TargetPlatform.iOS) {
-      return 'ios';
-    }
-    return 'unknown';
-  }
-
-  /// Keep the notification sound fixed to the APK-bundled Android raw resource.
+  /// Kept for compatibility with startup code; notifications now use default sound.
   Future<void> preloadNotificationSounds() async {
     debugPrint(
-        '[NotificationService] Using APK-bundled ambulance_alert sound; remote sound preload skipped.');
-  }
-
-  /// Returns the Android raw resource name used by the notification channel.
-  Future<String> getNotificationSoundPath() async {
-    debugPrint('[NotificationService] ðŸŽµ Using built-in sound: ambulance_alert');
-    return 'ambulance_alert';
+        '[NotificationService] Default notification sound enabled; remote sound preload skipped.');
   }
 }
 

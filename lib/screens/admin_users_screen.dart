@@ -8,10 +8,7 @@ import '../config/constants.dart';
 class AdminUsersScreen extends StatefulWidget {
   final User user;
 
-  const AdminUsersScreen({
-    Key? key,
-    required this.user,
-  }) : super(key: key);
+  const AdminUsersScreen({Key? key, required this.user}) : super(key: key);
 
   @override
   State<AdminUsersScreen> createState() => _AdminUsersScreenState();
@@ -20,7 +17,7 @@ class AdminUsersScreen extends StatefulWidget {
 class _AdminUsersScreenState extends State<AdminUsersScreen> {
   final _adminService = AdminService();
   late Future<List<Map<String, dynamic>>> _usersFuture;
-  String _filterRole = 'all'; // all, admin, manager, driver
+  String _filterRole = 'all'; // all, admin, owner, manager, driver
 
   @override
   void initState() {
@@ -95,8 +92,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                                       : Icons.visibility,
                                 ),
                                 onPressed: () {
-                                  setDialogState(() =>
-                                      _obscurePassword = !_obscurePassword);
+                                  setDialogState(
+                                    () => _obscurePassword = !_obscurePassword,
+                                  );
                                 },
                               ),
                               if (passwordController.text.isNotEmpty)
@@ -105,12 +103,14 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                                   onPressed: () {
                                     Clipboard.setData(
                                       ClipboardData(
-                                          text: passwordController.text),
+                                        text: passwordController.text,
+                                      ),
                                     );
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       const SnackBar(
                                         content: Text(
-                                            'Password copied to clipboard'),
+                                          'Password copied to clipboard',
+                                        ),
                                         duration: Duration(seconds: 1),
                                       ),
                                     );
@@ -131,10 +131,12 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                         ),
                         isExpanded: true,
                         items: tenants
-                            .map((tenant) => DropdownMenuItem<String>(
-                                  value: tenant['id'],
-                                  child: Text(tenant['name'] ?? 'Unknown'),
-                                ))
+                            .map(
+                              (tenant) => DropdownMenuItem<String>(
+                                value: tenant['id'],
+                                child: Text(tenant['name'] ?? 'Unknown'),
+                              ),
+                            )
                             .toList(),
                         onChanged: (value) {
                           setDialogState(() => selectedTenantId = value);
@@ -150,18 +152,29 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                         ),
                         items: const [
                           DropdownMenuItem(
-                              value: 'admin', child: Text('Admin')),
+                            value: 'admin',
+                            child: Text('Admin'),
+                          ),
                           DropdownMenuItem(
-                              value: 'manager', child: Text('Manager')),
+                            value: 'owner',
+                            child: Text('Owner'),
+                          ),
                           DropdownMenuItem(
-                              value: 'driver', child: Text('Driver')),
+                            value: 'manager',
+                            child: Text('Manager'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'driver',
+                            child: Text('Driver'),
+                          ),
                         ],
                         onChanged: (value) {
                           print('[DIALOG] Role dropdown changed: $value');
                           setDialogState(() {
                             selectedRole = value ?? 'driver';
                             print(
-                                '[DIALOG] selectedRole updated to: $selectedRole');
+                              '[DIALOG] selectedRole updated to: $selectedRole',
+                            );
                           });
                         },
                       ),
@@ -205,7 +218,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                   try {
                     // DEBUG: Log the values at submission time
                     print(
-                        '[DIALOG_SUBMIT] Creating user with role: $selectedRole (type: ${selectedRole.runtimeType})');
+                      '[DIALOG_SUBMIT] Creating user with role: $selectedRole (type: ${selectedRole.runtimeType})',
+                    );
                     print('[DIALOG_SUBMIT] Email: ${emailController.text}');
                     print('[DIALOG_SUBMIT] Name: ${nameController.text}');
                     print('[DIALOG_SUBMIT] TenantId: $selectedTenantId');
@@ -291,10 +305,12 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                         ),
                         isExpanded: true,
                         items: tenants
-                            .map((tenant) => DropdownMenuItem<String>(
-                                  value: tenant['id'],
-                                  child: Text(tenant['name'] ?? 'Unknown'),
-                                ))
+                            .map(
+                              (tenant) => DropdownMenuItem<String>(
+                                value: tenant['id'],
+                                child: Text(tenant['name'] ?? 'Unknown'),
+                              ),
+                            )
                             .toList(),
                         onChanged: (value) {
                           setState(() => selectedTenantId = value);
@@ -309,11 +325,21 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                         ),
                         items: const [
                           DropdownMenuItem(
-                              value: 'admin', child: Text('Admin')),
+                            value: 'admin',
+                            child: Text('Admin'),
+                          ),
                           DropdownMenuItem(
-                              value: 'manager', child: Text('Manager')),
+                            value: 'owner',
+                            child: Text('Owner'),
+                          ),
                           DropdownMenuItem(
-                              value: 'driver', child: Text('Driver')),
+                            value: 'manager',
+                            child: Text('Manager'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'driver',
+                            child: Text('Driver'),
+                          ),
                         ],
                         onChanged: (value) {
                           setState(() => selectedRole = value ?? 'driver');
@@ -388,9 +414,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             onPressed: () async {
               try {
                 await _adminService.deleteUser(userItem['id'].toString());
@@ -503,6 +527,14 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                       ),
                       const SizedBox(width: 8),
                       FilterChip(
+                        label: const Text('Owner'),
+                        selected: _filterRole == 'owner',
+                        onSelected: (selected) {
+                          setState(() => _filterRole = 'owner');
+                        },
+                      ),
+                      const SizedBox(width: 8),
+                      FilterChip(
                         label: const Text('Manager'),
                         selected: _filterRole == 'manager',
                         onSelected: (selected) {
@@ -559,7 +591,9 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                             Text(
                               'Tenant: ${userItem['tenant_id'] ?? 'N/A'}',
                               style: TextStyle(
-                                  fontSize: 12, color: Colors.grey[600]),
+                                fontSize: 12,
+                                color: Colors.grey[600],
+                              ),
                             ),
                           ],
                         ),
@@ -736,9 +770,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
         actions: [
           OutlinedButton.icon(
             onPressed: () {
-              Clipboard.setData(
-                ClipboardData(text: password),
-              );
+              Clipboard.setData(ClipboardData(text: password));
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: const Text('Password copied to clipboard! ✅'),
@@ -789,10 +821,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
             ),
           ],
         ),
-        content: Text(
-          message,
-          style: const TextStyle(fontSize: 14),
-        ),
+        content: Text(message, style: const TextStyle(fontSize: 14)),
         contentPadding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
         actionsPadding: const EdgeInsets.all(16),
         actions: [
@@ -863,10 +892,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Text(
-              icon,
-              style: const TextStyle(fontSize: 28),
-            ),
+            Text(icon, style: const TextStyle(fontSize: 28)),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -897,9 +923,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Retry'),
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.orange,
-            ),
+            style: TextButton.styleFrom(foregroundColor: Colors.orange),
           ),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(context),
@@ -919,6 +943,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
     switch (role) {
       case 'admin':
         return Colors.red;
+      case 'owner':
+        return Colors.purple;
       case 'manager':
         return Colors.orange;
       case 'driver':

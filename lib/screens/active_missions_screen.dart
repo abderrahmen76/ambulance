@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show Supabase;
@@ -8,6 +10,7 @@ import '../models/user_model.dart';
 import '../services/company_staff_service.dart';
 import '../services/mission_service.dart';
 import '../services/pdf_service.dart';
+import '../services/realtime_event_bus_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/clinic_dropdown_field.dart';
 import '../widgets/patient_request_summary_card.dart';
@@ -34,11 +37,14 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   String _selectedStatus = 'pending'; // pending, active, completed
   bool _hasActiveMission = false;
   List<User> _companyStaff = [];
+  List<Mission> _cachedMissions = [];
+  StreamSubscription<RealtimeAppEvent>? _realtimeSubscription;
 
-  Future<void> _checkActiveMission() async {
+  Future<void> _checkActiveMission({bool forceRefresh = false}) async {
     try {
       final activeMissions = await _missionService.getActiveMissions(
         widget.ambulanceId,
+        forceRefresh: forceRefresh,
       );
       if (mounted) {
         setState(() {
@@ -53,9 +59,17 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
   @override
   void initState() {
     super.initState();
+    _realtimeSubscription =
+        RealtimeEventBusService.instance.stream.listen(_handleRealtimeEvent);
     _loadMissions();
     _checkActiveMission();
     _loadCompanyStaff();
+  }
+
+  @override
+  void dispose() {
+    _realtimeSubscription?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadCompanyStaff() async {
@@ -77,7 +91,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
     }
   }
 
-  void _loadMissions() {
+  void _loadMissions({bool forceRefresh = false}) {
     if (mounted) {
       setState(() {
         // For pending missions, use getAvailableMissions() to fetch all pending missions
@@ -85,13 +99,89 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         if (_selectedStatus == 'pending') {
           _allMissionsFuture = _missionService.getAvailableMissions(
             widget.ambulanceId,
+            forceRefresh: forceRefresh,
           );
         } else {
           _allMissionsFuture = _missionService.getMissionsForAmbulance(
             widget.ambulanceId,
+            forceRefresh: forceRefresh,
           );
         }
       });
+    }
+  }
+
+  void _handleRealtimeEvent(RealtimeAppEvent event) {
+    if (!mounted) return;
+    if (event.type == RealtimeEventType.missionRefreshRequested) {
+      _loadMissions(forceRefresh: true);
+      _checkActiveMission(forceRefresh: true);
+      return;
+    }
+    if (_cachedMissions.isEmpty) return;
+    if (event.type == RealtimeEventType.ambulanceUpdated) return;
+
+    final updated = List<Mission>.from(_cachedMissions);
+
+    if (event.type == RealtimeEventType.missionDeleted) {
+      final missionId = event.recordId;
+      if (missionId == null) return;
+      updated.removeWhere((mission) => mission.id == missionId);
+    } else {
+      final mission = event.mission;
+      if (mission == null) return;
+      final index = updated.indexWhere((item) => item.id == mission.id);
+      final shouldInclude = _missionBelongsInCurrentDriverList(mission);
+
+      if (index == -1 && shouldInclude) {
+        updated.insert(0, mission);
+      } else if (index != -1 && shouldInclude) {
+        updated[index] = mission;
+      } else if (index != -1) {
+        updated.removeAt(index);
+      }
+    }
+
+    _cachedMissions = updated;
+    final eventMission = event.mission;
+    final eventIsActiveForAmbulance = eventMission != null &&
+        eventMission.status == 'active' &&
+        (eventMission.ambulanceId == widget.ambulanceId ||
+            eventMission.assignedAmbulanceId == widget.ambulanceId);
+
+    setState(() {
+      _hasActiveMission =
+          updated.any((mission) => mission.status == 'active') ||
+              eventIsActiveForAmbulance;
+      _allMissionsFuture = Future.value(List<Mission>.from(_cachedMissions));
+    });
+  }
+
+  bool _missionBelongsInCurrentDriverList(Mission mission) {
+    final tenantId = widget.user.tenantId;
+    final sameTenant = tenantId != null &&
+        tenantId.isNotEmpty &&
+        (mission.tenantId == tenantId ||
+            mission.assignedCompanyId == tenantId ||
+            mission.selectedProviderTenantId == tenantId);
+    final assignedToAmbulance = mission.ambulanceId == widget.ambulanceId ||
+        mission.assignedAmbulanceId == widget.ambulanceId;
+
+    if (_selectedStatus == 'pending') {
+      return mission.status == 'pending' && (sameTenant || assignedToAmbulance);
+    }
+
+    return mission.status == _selectedStatus && assignedToAmbulance;
+  }
+
+  Future<Mission> _hydrateMissionForPhi(Mission mission) async {
+    try {
+      return await _missionService.hydrateMissionWithPrivateData(mission);
+    } catch (e) {
+      debugPrint(
+        '[ActiveMissionsScreen] Warning: could not hydrate private mission data for ${mission.id}: $e',
+      );
+      return mission;
     }
   }
 
@@ -223,7 +313,8 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
           Expanded(
             child: RefreshIndicator(
               onRefresh: () {
-                _loadMissions();
+                _loadMissions(forceRefresh: true);
+                _checkActiveMission(forceRefresh: true);
                 return _allMissionsFuture;
               },
               child: FutureBuilder<List<Mission>>(
@@ -270,6 +361,7 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   }
 
                   final allMissions = snapshot.data ?? [];
+                  _cachedMissions = allMissions;
                   // For pending missions, all missions are already pending (filtered by query)
                   // For active/completed, need to filter again
                   var filteredMissions = (_selectedStatus == 'pending')
@@ -345,10 +437,12 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
     return Expanded(
       child: GestureDetector(
         onTap: () {
+          if (_selectedStatus == status) return;
           setState(() {
             _selectedStatus = status;
           });
-          _loadMissions(); // Reload missions when tab changes
+          _loadMissions(forceRefresh: true);
+          _checkActiveMission(forceRefresh: true);
         },
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
@@ -712,10 +806,29 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
                   ),
                 ],
               ),
-              if (mission.patientPhone != null)
+              if (isActive)
                 ElevatedButton.icon(
                   onPressed: !kIsWeb
-                      ? () => _makePhoneCall(mission.patientPhone!)
+                      ? () async {
+                          final hydratedMission = await _hydrateMissionForPhi(
+                            mission,
+                          );
+                          final patientPhone =
+                              hydratedMission.patientPhone?.trim();
+                          if (patientPhone == null || patientPhone.isEmpty) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Aucun numero patient disponible',
+                                ),
+                                backgroundColor: Colors.orange,
+                              ),
+                            );
+                            return;
+                          }
+                          await _makePhoneCall(patientPhone);
+                        }
                       : null,
                   icon: const Icon(Icons.phone, size: 16),
                   label: const Text('Appeler Patient'),
@@ -835,7 +948,13 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: () => _showEditMissionDataDialog(context, mission),
+                  onPressed: () async {
+                    final hydratedMission = await _hydrateMissionForPhi(
+                      mission,
+                    );
+                    if (!mounted) return;
+                    _showEditMissionDataDialog(context, hydratedMission);
+                  },
                   icon: const Icon(Icons.edit, size: 16),
                   label: const Text('Modifier les Données'),
                   style: ElevatedButton.styleFrom(
@@ -1903,8 +2022,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         );
       }
 
+      final hydratedMission = await _hydrateMissionForPhi(mission);
+
       // Generate and download PDF
-      await PdfService.generateMissionReportPdf(mission);
+      await PdfService.generateMissionReportPdf(hydratedMission);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1943,8 +2064,10 @@ class _ActiveMissionsScreenState extends State<ActiveMissionsScreen> {
         );
       }
 
+      final hydratedMission = await _hydrateMissionForPhi(mission);
+
       // Generate and download invoice PDF
-      await PdfService.generateInvoicePdf(mission);
+      await PdfService.generateInvoicePdf(hydratedMission);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
